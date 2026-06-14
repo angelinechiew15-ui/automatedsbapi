@@ -230,7 +230,8 @@ public class ServiceBundleController : ControllerBase
                     tsDemand = empty, tsActual = empty,
                     rtuDemand = empty, rtuActual = empty,
                     costDemand = empty, costActual = empty,
-                    pareto = empty
+                    pareto = empty,
+                    tsRows = empty, rtuRows = empty, costRows = empty
                 });
             }
 
@@ -242,6 +243,12 @@ public class ServiceBundleController : ControllerBase
             var costActual = await QueryCostActualAsync(sbName, horizon, loc);
             var pareto = await QueryParetoAsync(sbId, sbName, horizon, loc);
 
+            // Detailed per-location breakdown (only meaningful when a single location
+            // is selected; the "All" tab keeps the simple combined table).
+            var (tsRows, rtuRows, costRows) = string.IsNullOrWhiteSpace(loc)
+                ? (new List<object>(), new List<object>(), new List<object>())
+                : await QueryBreakdownAsync(sbName, horizon, loc);
+
             return Ok(new
             {
                 success = true,
@@ -251,7 +258,10 @@ public class ServiceBundleController : ControllerBase
                 rtuActual,
                 costDemand,
                 costActual,
-                pareto
+                pareto,
+                tsRows,
+                rtuRows,
+                costRows
             });
         }
         catch (OracleException ex)
@@ -319,10 +329,229 @@ public class ServiceBundleController : ControllerBase
     private Task<List<object>> QueryCostActualAsync(string sbName, string horizon, string? loc)
         => RunSeriesAsync(_factory.Create, SeriesSql("t.cost_act", "COST", "Change", loc), sbName, horizon, loc);
 
-    // Cost demand: no base demand column yet (formula to be provided), so the base is
-    // 0 and only the Adder COST contributes for now.
-    private Task<List<object>> QueryCostDemandAsync(string sbName, string horizon, string? loc)
-        => RunSeriesAsync(_factory.Create, SeriesSql("0", "COST", "Adder", loc), sbName, horizon, loc);
+    // Cost demand: computed from the test-effort projection plus depreciation and the
+    // COST adder, annualised (x4) for FY-only rows. The chart line uses the full
+    // "demand with adder" total (rfcWoAdder + COST adder).
+    private async Task<List<object>> QueryCostDemandAsync(string sbName, string horizon, string? loc)
+    {
+        var comps = await QueryCostDemandComponentsAsync(sbName, horizon, loc);
+        return comps
+            .Select(c => (object)new { label = c.Label, value = c.RfcWo + c.Addc })
+            .ToList();
+    }
+
+    // Common LEFT JOIN from asb_ts_actual (alias t) to a single adder row of the given
+    // type ('Adder'/'Change') and measure ('TS'/'RTU'/'COST'). The type/for values are
+    // constant, code-controlled literals (not user input).
+    private static string AdderJoin(string alias, string adderType, string adderFor) => $@"
+                    LEFT JOIN rpt.cm_matrix_sb_adder {alias}
+                      ON t.loc = {alias}.cm_matrix_adder_location
+                     AND t.sb = {alias}.cm_matrix_adder_sb_name
+                     AND t.fy || '-' || t.quarter = {alias}.cm_matrix_adder_fy || '-' || {alias}.cm_matrix_adder_quarter
+                     AND t.horizon = {alias}.cm_matrix_adder_horizon
+                     AND {alias}.cm_matrix_adder_type = '{adderType}'
+                     AND {alias}.cm_matrix_adder_for = '{adderFor}'";
+
+    // Cost-demand components per fiscal quarter:
+    //   rfc_wo = SUM(((ts_demand + adder_ts) * 3 * "RTU/TS") + adder_rtu) * SUM("COST/RTU") / 1000
+    //            + SUM(depreciation)                         ("Cost RFC w/o Adder")
+    //   depr   = SUM(depreciation)                            ("Cost RFC Depreciation")
+    //   addc   = SUM(adder_cost)                              ("Adder Value Cost Demand")
+    // All three are multiplied by 4 for FY-only rows (quarter IS NULL) to annualise.
+    private static string CostDemandComponentsSql(string? loc)
+    {
+        var locClause = string.IsNullOrWhiteSpace(loc) ? "" : " AND t.loc = :loc";
+        const string labelExpr = "CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END";
+        return $@"SELECT label,
+                         CASE WHEN isq = 1 THEN rfc_wo ELSE rfc_wo * 4 END AS rfc_wo,
+                         CASE WHEN isq = 1 THEN depr   ELSE depr   * 4 END AS depr,
+                         CASE WHEN isq = 1 THEN addc   ELSE addc   * 4 END AS addc
+                    FROM (
+                      SELECT {labelExpr} AS label,
+                             CASE WHEN t.quarter IS NULL THEN 0 ELSE 1 END AS isq,
+                             SUM(((TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR)
+                                   + NVL(TO_NUMBER(at.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)) * 3
+                                  * TO_NUMBER(t.""RTU/TS"" DEFAULT 0 ON CONVERSION ERROR))
+                                 + NVL(TO_NUMBER(ar.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0))
+                               * SUM(TO_NUMBER(t.""COST/RTU"" DEFAULT 0 ON CONVERSION ERROR)) / 1000
+                               + SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS rfc_wo,
+                             SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS depr,
+                             SUM(NVL(TO_NUMBER(ac.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)) AS addc
+                        FROM rpt.asb_ts_actual t{AdderJoin("at", "Adder", "TS")}{AdderJoin("ar", "Adder", "RTU")}{AdderJoin("ac", "Adder", "COST")}
+                       WHERE t.sb = :sbName AND t.horizon = :horizon{locClause}
+                       GROUP BY {labelExpr}, CASE WHEN t.quarter IS NULL THEN 0 ELSE 1 END
+                    )
+                   ORDER BY label ASC";
+    }
+
+    private async Task<List<CostDemandRow>> QueryCostDemandComponentsAsync(string sbName, string horizon, string? loc)
+    {
+        var rows = new List<CostDemandRow>();
+        await using var conn = _factory.Create();
+        await conn.OpenAsync();
+        await using var cmd = new OracleCommand(CostDemandComponentsSql(loc), conn) { BindByName = true };
+        cmd.Parameters.Add(new OracleParameter("sbName", sbName));
+        cmd.Parameters.Add(new OracleParameter("horizon", horizon ?? (object)DBNull.Value));
+        if (!string.IsNullOrWhiteSpace(loc))
+        {
+            cmd.Parameters.Add(new OracleParameter("loc", loc));
+        }
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            rows.Add(new CostDemandRow(
+                reader["label"]?.ToString() ?? "",
+                reader["rfc_wo"] == DBNull.Value ? 0d : Convert.ToDouble(reader["rfc_wo"]),
+                reader["depr"] == DBNull.Value ? 0d : Convert.ToDouble(reader["depr"]),
+                reader["addc"] == DBNull.Value ? 0d : Convert.ToDouble(reader["addc"])));
+        }
+        return rows;
+    }
+
+    // Per-location detailed table data: returns (tsRows, rtuRows, costRows). Each row
+    // carries the raw component values; the frontend derives "with adder" totals,
+    // utilization and deviation so all rounding lives in one place.
+    private async Task<(List<object> Ts, List<object> Rtu, List<object> Cost)> QueryBreakdownAsync(
+        string sbName, string horizon, string loc)
+    {
+        var baseRows = await QueryBaseSumsAsync(sbName, horizon, loc);
+        var adders = await QueryAdderSumsAsync(sbName, horizon, loc);
+        var costComps = (await QueryCostDemandComponentsAsync(sbName, horizon, loc))
+            .ToDictionary(c => c.Label, c => c, StringComparer.OrdinalIgnoreCase);
+
+        var ts = new List<object>();
+        var rtu = new List<object>();
+        var cost = new List<object>();
+
+        foreach (var b in baseRows)
+        {
+            var a = adders.GetValueOrDefault(b.Label) ?? AdderRow.Empty;
+
+            ts.Add(new
+            {
+                label = b.Label,
+                baseDemand = b.TsDemand,
+                adderDemand = a.AdderTs,
+                baseActual = b.TsActual,
+                changeActual = a.ChangeTs
+            });
+
+            rtu.Add(new
+            {
+                label = b.Label,
+                baseDemand = b.RtuPlan,
+                adderDemand = a.AdderRtu,
+                baseActual = b.RtuAct,
+                changeActual = a.ChangeRtu,
+                rtuTs = b.RtuTs
+            });
+
+            costComps.TryGetValue(b.Label, out var cd);
+            cost.Add(new
+            {
+                label = b.Label,
+                rfcWoDemand = cd?.RfcWo ?? 0d,
+                depreciation = cd?.Depr ?? 0d,
+                adderDemand = cd?.Addc ?? 0d,
+                baseActual = b.CostAct,
+                changeActual = a.ChangeCost,
+                costRtu = b.CostRtu
+            });
+        }
+
+        return (ts, rtu, cost);
+    }
+
+    // One pass over asb_ts_actual summing every base measure per fiscal quarter.
+    private async Task<List<BaseRow>> QueryBaseSumsAsync(string sbName, string horizon, string loc)
+    {
+        const string labelExpr = "CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END";
+        var sql = $@"SELECT {labelExpr} AS label,
+                            SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR)) AS ts_demand,
+                            SUM(TO_NUMBER(t.ts_actual DEFAULT 0 ON CONVERSION ERROR)) AS ts_actual,
+                            SUM(TO_NUMBER(t.rtu_plan  DEFAULT 0 ON CONVERSION ERROR)) AS rtu_plan,
+                            SUM(TO_NUMBER(t.rtu_act   DEFAULT 0 ON CONVERSION ERROR)) AS rtu_act,
+                            SUM(TO_NUMBER(t.cost_act  DEFAULT 0 ON CONVERSION ERROR)) AS cost_act,
+                            SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS depr,
+                            SUM(TO_NUMBER(t.""RTU/TS""  DEFAULT 0 ON CONVERSION ERROR)) AS rtu_ts,
+                            SUM(TO_NUMBER(t.""COST/RTU"" DEFAULT 0 ON CONVERSION ERROR)) AS cost_rtu
+                       FROM rpt.asb_ts_actual t
+                      WHERE t.sb = :sbName AND t.horizon = :horizon AND t.loc = :loc
+                      GROUP BY {labelExpr}
+                      ORDER BY {labelExpr} ASC";
+
+        var rows = new List<BaseRow>();
+        await using var conn = _factory.Create();
+        await conn.OpenAsync();
+        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+        cmd.Parameters.Add(new OracleParameter("sbName", sbName));
+        cmd.Parameters.Add(new OracleParameter("horizon", horizon ?? (object)DBNull.Value));
+        cmd.Parameters.Add(new OracleParameter("loc", loc));
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        double D(string c) => reader[c] == DBNull.Value ? 0d : Convert.ToDouble(reader[c]);
+        while (await reader.ReadAsync())
+        {
+            rows.Add(new BaseRow(
+                reader["label"]?.ToString() ?? "",
+                D("ts_demand"), D("ts_actual"), D("rtu_plan"), D("rtu_act"),
+                D("cost_act"), D("depr"), D("rtu_ts"), D("cost_rtu")));
+        }
+        return rows;
+    }
+
+    // One pass over the adder table summing each adder/change value per fiscal quarter.
+    private async Task<Dictionary<string, AdderRow>> QueryAdderSumsAsync(string sbName, string horizon, string loc)
+    {
+        const string labelExpr = "CASE WHEN a.cm_matrix_adder_quarter IS NULL THEN a.cm_matrix_adder_fy " +
+                                 "ELSE a.cm_matrix_adder_fy || ' ' || a.cm_matrix_adder_quarter END";
+        string Pick(string type, string measure) =>
+            $"SUM(CASE WHEN a.cm_matrix_adder_type = '{type}' AND a.cm_matrix_adder_for = '{measure}' " +
+            "THEN TO_NUMBER(a.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR) ELSE 0 END)";
+
+        var sql = $@"SELECT {labelExpr} AS label,
+                            {Pick("Adder", "TS")}    AS adder_ts,
+                            {Pick("Change", "TS")}   AS change_ts,
+                            {Pick("Adder", "RTU")}   AS adder_rtu,
+                            {Pick("Change", "RTU")}  AS change_rtu,
+                            {Pick("Adder", "COST")}  AS adder_cost,
+                            {Pick("Change", "COST")} AS change_cost
+                       FROM rpt.cm_matrix_sb_adder a
+                      WHERE a.cm_matrix_adder_sb_name = :sbName
+                        AND a.cm_matrix_adder_horizon = :horizon
+                        AND a.cm_matrix_adder_location = :loc
+                      GROUP BY {labelExpr}";
+
+        var map = new Dictionary<string, AdderRow>(StringComparer.OrdinalIgnoreCase);
+        await using var conn = _factory.Create();
+        await conn.OpenAsync();
+        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+        cmd.Parameters.Add(new OracleParameter("sbName", sbName));
+        cmd.Parameters.Add(new OracleParameter("horizon", horizon ?? (object)DBNull.Value));
+        cmd.Parameters.Add(new OracleParameter("loc", loc));
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        double D(string c) => reader[c] == DBNull.Value ? 0d : Convert.ToDouble(reader[c]);
+        while (await reader.ReadAsync())
+        {
+            map[reader["label"]?.ToString() ?? ""] = new AdderRow(
+                D("adder_ts"), D("change_ts"), D("adder_rtu"),
+                D("change_rtu"), D("adder_cost"), D("change_cost"));
+        }
+        return map;
+    }
+
+    private sealed record BaseRow(string Label, double TsDemand, double TsActual, double RtuPlan,
+        double RtuAct, double CostAct, double Depr, double RtuTs, double CostRtu);
+
+    private sealed record AdderRow(double AdderTs, double ChangeTs, double AdderRtu,
+        double ChangeRtu, double AdderCost, double ChangeCost)
+    {
+        public static readonly AdderRow Empty = new(0, 0, 0, 0, 0, 0);
+    }
+
+    private sealed record CostDemandRow(string Label, double RfcWo, double Depr, double Addc);
 
     // Pareto by client corridor (descending volume).
     // The asb_ts_actual.cc column is largely empty, so we derive the corridor from the
