@@ -223,22 +223,34 @@ public class ServiceBundleController : ControllerBase
             var sbName = await GetSbNameAsync(sbId);
             if (string.IsNullOrEmpty(sbName))
             {
-                return Ok(new { success = true, demand = new List<object>(), rtu = new List<object>(), testStarts = new List<object>(), pareto = new List<object>() });
+                var empty = new List<object>();
+                return Ok(new
+                {
+                    success = true,
+                    tsDemand = empty, tsActual = empty,
+                    rtuDemand = empty, rtuActual = empty,
+                    costDemand = empty, costActual = empty,
+                    pareto = empty
+                });
             }
 
-            var demand = await QueryDemandAsync(sbName, horizon, loc);
-            var rtu = await QueryRtuAsync(sbName, horizon, loc);
-            var testStarts = await QueryTestStartsAsync(sbName, horizon, loc);
-            var cost = await QueryCostAsync(sbName, horizon, loc);
+            var tsDemand = await QueryTsDemandAsync(sbName, horizon, loc);
+            var tsActual = await QueryTsActualAsync(sbName, horizon, loc);
+            var rtuDemand = await QueryRtuDemandAsync(sbName, horizon, loc);
+            var rtuActual = await QueryRtuActualAsync(sbName, horizon, loc);
+            var costDemand = await QueryCostDemandAsync(sbName, horizon, loc);
+            var costActual = await QueryCostActualAsync(sbName, horizon, loc);
             var pareto = await QueryParetoAsync(sbId, sbName, horizon, loc);
 
             return Ok(new
             {
                 success = true,
-                demand,
-                rtu,
-                testStarts,
-                cost,
+                tsDemand,
+                tsActual,
+                rtuDemand,
+                rtuActual,
+                costDemand,
+                costActual,
                 pareto
             });
         }
@@ -276,21 +288,28 @@ public class ServiceBundleController : ControllerBase
                    ORDER BY CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END ASC";
     }
 
-    // Demand over quarters.
-    private Task<List<object>> QueryDemandAsync(string sbName, string horizon, string? loc)
+    // Test starts: demand (TS_DEMAND) and actual (TS_ACTUAL) over quarters.
+    private Task<List<object>> QueryTsDemandAsync(string sbName, string horizon, string? loc)
         => RunSeriesAsync(_factory.Create, SeriesSql("t.ts_demand", loc), sbName, horizon, loc);
 
-    // RTU over quarters.
-    private Task<List<object>> QueryRtuAsync(string sbName, string horizon, string? loc)
-        => RunSeriesAsync(_factory.Create, SeriesSql("t.rtu_act", loc), sbName, horizon, loc);
-
-    // Test starts over quarters.
-    private Task<List<object>> QueryTestStartsAsync(string sbName, string horizon, string? loc)
+    private Task<List<object>> QueryTsActualAsync(string sbName, string horizon, string? loc)
         => RunSeriesAsync(_factory.Create, SeriesSql("t.ts_actual", loc), sbName, horizon, loc);
 
-    // Cost (actual) over quarters.
-    private Task<List<object>> QueryCostAsync(string sbName, string horizon, string? loc)
+    // Test effort (RTU): demand (RTU_PLAN) and actual (RTU_ACT) over quarters.
+    private Task<List<object>> QueryRtuDemandAsync(string sbName, string horizon, string? loc)
+        => RunSeriesAsync(_factory.Create, SeriesSql("t.rtu_plan", loc), sbName, horizon, loc);
+
+    private Task<List<object>> QueryRtuActualAsync(string sbName, string horizon, string? loc)
+        => RunSeriesAsync(_factory.Create, SeriesSql("t.rtu_act", loc), sbName, horizon, loc);
+
+    // Test cost: actual (COST_ACT) over quarters.
+    private Task<List<object>> QueryCostActualAsync(string sbName, string horizon, string? loc)
         => RunSeriesAsync(_factory.Create, SeriesSql("t.cost_act", loc), sbName, horizon, loc);
+
+    // Cost demand: no source column yet (formula to be provided). Returns a zero
+    // placeholder aligned to the same quarters so the chart axis stays consistent.
+    private Task<List<object>> QueryCostDemandAsync(string sbName, string horizon, string? loc)
+        => RunSeriesAsync(_factory.Create, SeriesSql("0", loc), sbName, horizon, loc);
 
     // Pareto by client corridor (descending volume).
     // The asb_ts_actual.cc column is largely empty, so we derive the corridor from the
