@@ -229,6 +229,7 @@ public class ServiceBundleController : ControllerBase
             var demand = await QueryDemandAsync(sbName, horizon, loc);
             var rtu = await QueryRtuAsync(sbName, horizon, loc);
             var testStarts = await QueryTestStartsAsync(sbName, horizon, loc);
+            var cost = await QueryCostAsync(sbName, horizon, loc);
             var pareto = await QueryParetoAsync(sbId, sbName, horizon, loc);
 
             return Ok(new
@@ -237,6 +238,7 @@ public class ServiceBundleController : ControllerBase
                 demand,
                 rtu,
                 testStarts,
+                cost,
                 pareto
             });
         }
@@ -285,6 +287,10 @@ public class ServiceBundleController : ControllerBase
     // Test starts over quarters.
     private Task<List<object>> QueryTestStartsAsync(string sbName, string horizon, string? loc)
         => RunSeriesAsync(_factory.Create, SeriesSql("t.ts_actual", loc), sbName, horizon, loc);
+
+    // Cost (actual) over quarters.
+    private Task<List<object>> QueryCostAsync(string sbName, string horizon, string? loc)
+        => RunSeriesAsync(_factory.Create, SeriesSql("t.cost_act", loc), sbName, horizon, loc);
 
     // Pareto by client corridor (descending volume).
     // The asb_ts_actual.cc column is largely empty, so we derive the corridor from the
