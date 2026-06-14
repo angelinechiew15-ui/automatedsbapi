@@ -14,5 +14,8 @@ obj/
 # ASP.NET Core environment files
 AutomatedSb.Api/appsettings.json
 
+# OpenShift secret with real credentials (keep only the template in git)
+openshift/db-secret.yaml
+
 # Others
 *.log

@@ -1,0 +1,62 @@
+# S2I build pipeline for AutomatedSb.Api on OpenShift.
+#
+# Produces the "automatedsbapi-git:latest" image that backend-deployment.yaml runs.
+#
+# Fill in <...> placeholders (git URL/branch, and webhook secrets) before applying:
+#   oc apply -f backend-buildconfig.yaml
+#   oc start-build automatedsbapi-git --follow
+#
+# The .NET version (dotnet:8.0) must match <TargetFramework>net8.0</TargetFramework>
+# in AutomatedSb.Api.csproj. The .s2i/environment file in the repo root sets
+# DOTNET_STARTUP_PROJECT, so contextDir stays at the repo root.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: automatedsbapi-git
+  labels:
+    app: automatedsbapi-git
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: automatedsbapi-git
+  labels:
+    app: automatedsbapi-git
+spec:
+  runPolicy: Serial
+  source:
+    type: Git
+    git:
+      uri: "<https://your-git-host/AutomatedSb.Api.git>"
+      ref: "<branch-name>"
+    # contextDir left unset = repo root (where .s2i/environment lives).
+  strategy:
+    type: Source
+    sourceStrategy:
+      from:
+        kind: ImageStreamTag
+        namespace: openshift
+        name: "dotnet:8.0"
+      # DOTNET_STARTUP_PROJECT also comes from .s2i/environment; duplicated here
+      # so the build is correct even if .s2i is missing.
+      env:
+        - name: DOTNET_STARTUP_PROJECT
+          value: AutomatedSb.Api/AutomatedSb.Api.csproj
+  output:
+    to:
+      kind: ImageStreamTag
+      name: "automatedsbapi-git:latest"
+  triggers:
+    - type: ConfigChange
+    - type: ImageChange
+    - type: GitHub
+      github:
+        secret: "<github-webhook-secret>"
+    - type: Generic
+      generic:
+        secret: "<generic-webhook-secret>"
+  successfulBuildsHistoryLimit: 5
+  failedBuildsHistoryLimit: 5

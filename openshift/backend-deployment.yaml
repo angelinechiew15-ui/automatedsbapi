@@ -1,0 +1,87 @@
+# Declarative backend deployment for AutomatedSb.Api on OpenShift.
+#
+# The frontend pod (automatedsb-git) proxies /api to http://automatedsbapi-git:8080
+# (see server.mjs -> API_TARGET), so the Service name and port below MUST stay
+# "automatedsbapi-git" and 8080.
+#
+# Apply order:
+#   oc apply -f db-secret.yaml            # create the Secret first (see template)
+#   oc apply -f backend-deployment.yaml   # Deployment + Service
+#
+# Adjust the image reference below to your namespace if it differs. The trigger
+# annotation makes the Deployment roll out automatically whenever the S2I build
+# pushes a new "automatedsbapi-git:latest" image tag.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: automatedsbapi-git
+  labels:
+    app: automatedsbapi-git
+  annotations:
+    image.openshift.io/triggers: |
+      [{
+        "from": { "kind": "ImageStreamTag", "name": "automatedsbapi-git:latest" },
+        "fieldPath": "spec.template.spec.containers[?(@.name==\"automatedsbapi-git\")].image"
+      }]
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: automatedsbapi-git
+  template:
+    metadata:
+      labels:
+        app: automatedsbapi-git
+    spec:
+      containers:
+        - name: automatedsbapi-git
+          # Resolved by the trigger annotation above; "automatedsbapi-git:latest"
+          # is the ImageStreamTag produced by the S2I build.
+          image: automatedsbapi-git:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          # Credentials come from the Secret — never hard-coded in the image.
+          envFrom:
+            - secretRef:
+                name: automatedsbapi-db
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            - name: ASPNETCORE_URLS
+              value: http://*:8080
+          readinessProbe:
+            httpGet:
+              path: /api/sbol
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /api/sbol
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: automatedsbapi-git
+  labels:
+    app: automatedsbapi-git
+spec:
+  selector:
+    app: automatedsbapi-git
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
