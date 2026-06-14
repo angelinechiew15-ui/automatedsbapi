@@ -273,43 +273,56 @@ public class ServiceBundleController : ControllerBase
         return scalar == null || scalar == DBNull.Value ? "" : scalar.ToString() ?? "";
     }
 
-    // Builds a time-series SQL over the base table for the given measure, grouped by fiscal quarter.
-    // The v_sb_asb_data view casts dirty text columns with a plain TO_NUMBER, which throws ORA-01722
-    // when aggregated. Querying the base table lets us use a safe conversion (DEFAULT 0 ON CONVERSION ERROR).
-    private static string SeriesSql(string measure, string? loc)
+    // Builds a time-series SQL over the base table for the given measure plus its
+    // adder/change value, grouped by fiscal quarter. The adder/change comes from
+    // RPT.CM_MATRIX_SB_ADDER (the same join the v_sb_asb_data view uses), matched on
+    // SB + location + horizon + fiscal quarter and filtered by type ('Adder' or
+    // 'Change') and measure ('TS', 'RTU' or 'COST'). adderFor/adderType are constant,
+    // code-controlled literals (not user input). Every numeric cast uses
+    // DEFAULT 0 ON CONVERSION ERROR to avoid ORA-01722 on dirty text columns — the
+    // reason we query the base table here instead of the view (which casts unsafely).
+    private static string SeriesSql(string baseMeasure, string adderFor, string adderType, string? loc)
     {
         var locClause = string.IsNullOrWhiteSpace(loc) ? "" : " AND t.loc = :loc";
         return $@"SELECT CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END AS label,
-                         SUM(TO_NUMBER({measure} DEFAULT 0 ON CONVERSION ERROR)) AS value
+                         SUM(TO_NUMBER({baseMeasure} DEFAULT 0 ON CONVERSION ERROR)
+                             + NVL(TO_NUMBER(a.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)) AS value
                     FROM rpt.asb_ts_actual t
+                    LEFT JOIN rpt.cm_matrix_sb_adder a
+                      ON t.loc = a.cm_matrix_adder_location
+                     AND t.sb = a.cm_matrix_adder_sb_name
+                     AND t.fy || '-' || t.quarter = a.cm_matrix_adder_fy || '-' || a.cm_matrix_adder_quarter
+                     AND t.horizon = a.cm_matrix_adder_horizon
+                     AND a.cm_matrix_adder_type = '{adderType}'
+                     AND a.cm_matrix_adder_for = '{adderFor}'
                    WHERE t.sb = :sbName
                      AND t.horizon = :horizon{locClause}
                    GROUP BY CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END
                    ORDER BY CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END ASC";
     }
 
-    // Test starts: demand (TS_DEMAND) and actual (TS_ACTUAL) over quarters.
+    // Test starts: demand (TS_DEMAND + Adder TS) and actual (TS_ACTUAL + Change TS).
     private Task<List<object>> QueryTsDemandAsync(string sbName, string horizon, string? loc)
-        => RunSeriesAsync(_factory.Create, SeriesSql("t.ts_demand", loc), sbName, horizon, loc);
+        => RunSeriesAsync(_factory.Create, SeriesSql("t.ts_demand", "TS", "Adder", loc), sbName, horizon, loc);
 
     private Task<List<object>> QueryTsActualAsync(string sbName, string horizon, string? loc)
-        => RunSeriesAsync(_factory.Create, SeriesSql("t.ts_actual", loc), sbName, horizon, loc);
+        => RunSeriesAsync(_factory.Create, SeriesSql("t.ts_actual", "TS", "Change", loc), sbName, horizon, loc);
 
-    // Test effort (RTU): demand (RTU_PLAN) and actual (RTU_ACT) over quarters.
+    // Test effort (RTU): demand (RTU_PLAN + Adder RTU) and actual (RTU_ACT + Change RTU).
     private Task<List<object>> QueryRtuDemandAsync(string sbName, string horizon, string? loc)
-        => RunSeriesAsync(_factory.Create, SeriesSql("t.rtu_plan", loc), sbName, horizon, loc);
+        => RunSeriesAsync(_factory.Create, SeriesSql("t.rtu_plan", "RTU", "Adder", loc), sbName, horizon, loc);
 
     private Task<List<object>> QueryRtuActualAsync(string sbName, string horizon, string? loc)
-        => RunSeriesAsync(_factory.Create, SeriesSql("t.rtu_act", loc), sbName, horizon, loc);
+        => RunSeriesAsync(_factory.Create, SeriesSql("t.rtu_act", "RTU", "Change", loc), sbName, horizon, loc);
 
-    // Test cost: actual (COST_ACT) over quarters.
+    // Test cost: actual (COST_ACT + Change COST) over quarters.
     private Task<List<object>> QueryCostActualAsync(string sbName, string horizon, string? loc)
-        => RunSeriesAsync(_factory.Create, SeriesSql("t.cost_act", loc), sbName, horizon, loc);
+        => RunSeriesAsync(_factory.Create, SeriesSql("t.cost_act", "COST", "Change", loc), sbName, horizon, loc);
 
-    // Cost demand: no source column yet (formula to be provided). Returns a zero
-    // placeholder aligned to the same quarters so the chart axis stays consistent.
+    // Cost demand: no base demand column yet (formula to be provided), so the base is
+    // 0 and only the Adder COST contributes for now.
     private Task<List<object>> QueryCostDemandAsync(string sbName, string horizon, string? loc)
-        => RunSeriesAsync(_factory.Create, SeriesSql("0", loc), sbName, horizon, loc);
+        => RunSeriesAsync(_factory.Create, SeriesSql("0", "COST", "Adder", loc), sbName, horizon, loc);
 
     // Pareto by client corridor (descending volume).
     // The asb_ts_actual.cc column is largely empty, so we derive the corridor from the
