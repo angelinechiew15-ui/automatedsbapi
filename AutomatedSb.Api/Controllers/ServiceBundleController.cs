@@ -363,9 +363,9 @@ public class ServiceBundleController : ControllerBase
         var locClause = string.IsNullOrWhiteSpace(loc) ? "" : " AND t.loc = :loc";
         const string labelExpr = "CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END";
         return $@"SELECT label,
-                         CASE WHEN isq = 1 THEN rfc_wo ELSE rfc_wo * 4 END AS rfc_wo,
-                         CASE WHEN isq = 1 THEN depr   ELSE depr   * 4 END AS depr,
-                         CASE WHEN isq = 1 THEN addc   ELSE addc   * 4 END AS addc
+                         CAST(CASE WHEN isq = 1 THEN rfc_wo ELSE rfc_wo * 4 END AS BINARY_DOUBLE) AS rfc_wo,
+                         CAST(CASE WHEN isq = 1 THEN depr   ELSE depr   * 4 END AS BINARY_DOUBLE) AS depr,
+                         CAST(CASE WHEN isq = 1 THEN addc   ELSE addc   * 4 END AS BINARY_DOUBLE) AS addc
                     FROM (
                       SELECT {labelExpr} AS label,
                              CASE WHEN t.quarter IS NULL THEN 0 ELSE 1 END AS isq,
