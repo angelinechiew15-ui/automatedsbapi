@@ -84,6 +84,44 @@ public class ServiceBundleController : ControllerBase
         }
     }
 
+    // TEMP DIAGNOSTIC: list distinct loc values + summed ts_demand for an SB.
+    [HttpGet("locdiag")]
+    public async Task<ActionResult> LocDiag([FromQuery] string sbId, [FromQuery] string horizon)
+    {
+        string sbName = "";
+        await using var conn = _factory.Create();
+        await conn.OpenAsync();
+        await using (var c1 = new OracleCommand(
+            "SELECT cm_matrix_sb_name FROM cm_matrix_sb WHERE cm_matrix_sb_id = :sbId", conn)
+            { BindByName = true })
+        {
+            c1.Parameters.Add(new OracleParameter("sbId", sbId));
+            var s = await c1.ExecuteScalarAsync();
+            sbName = s == null || s == DBNull.Value ? "" : s.ToString() ?? "";
+        }
+
+        var rows = new List<object>();
+        await using var cmd = new OracleCommand(
+            @"SELECT t.loc AS loc, COUNT(*) AS n,
+                     SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR)) AS tsd
+                FROM rpt.asb_ts_actual t
+               WHERE t.sb = :sbName AND t.horizon = :horizon
+               GROUP BY t.loc ORDER BY t.loc", conn) { BindByName = true };
+        cmd.Parameters.Add(new OracleParameter("sbName", sbName));
+        cmd.Parameters.Add(new OracleParameter("horizon", horizon ?? (object)DBNull.Value));
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            rows.Add(new
+            {
+                loc = reader["loc"]?.ToString() ?? "",
+                n = reader["n"] == DBNull.Value ? 0 : Convert.ToInt32(reader["n"]),
+                tsd = reader["tsd"] == DBNull.Value ? 0d : Convert.ToDouble(reader["tsd"])
+            });
+        }
+        return Ok(new { sbName, rows });
+    }
+
     // GET api/service-bundle/dashboard?sbId=123
     // Returns the data needed to build the embedded Tableau charts for a SB:
     //   - sbName: used as the SB filter in the Tableau URLs
