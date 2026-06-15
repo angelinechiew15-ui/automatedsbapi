@@ -336,7 +336,7 @@ public class ServiceBundleController : ControllerBase
     {
         var comps = await QueryCostDemandComponentsAsync(sbName, horizon, loc);
         return comps
-            .Select(c => (object)new { label = c.Label, value = c.RfcWo + c.Addc })
+            .Select(c => (object)new { label = c.Label, value = c.RfcWo + c.Depr + c.Addc })
             .ToList();
     }
 
@@ -353,8 +353,8 @@ public class ServiceBundleController : ControllerBase
                      AND {alias}.cm_matrix_adder_for = '{adderFor}'";
 
     // Cost-demand components per fiscal quarter:
-    //   rfc_wo = SUM(((ts_demand + adder_ts) * 3 * "RTU/TS") + adder_rtu) * SUM("COST/RTU") / 1000
-    //            + SUM(depreciation)                         ("Cost RFC w/o Adder")
+    //   rfc_wo = (SUM(rtu_plan) + SUM(adder_rtu)) * SUM("COST/RTU") / 1000
+    //            i.e. (RTU RFC demand * cost/rtu) / 1000  ("Cost RFC w/o Depreciation")
     //   depr   = SUM(depreciation)                            ("Cost RFC Depreciation")
     //   addc   = SUM(adder_cost)                              ("Adder Value Cost Demand")
     // All three are multiplied by 4 for FY-only rows (quarter IS NULL) to annualise.
@@ -369,15 +369,12 @@ public class ServiceBundleController : ControllerBase
                     FROM (
                       SELECT {labelExpr} AS label,
                              CASE WHEN t.quarter IS NULL THEN 0 ELSE 1 END AS isq,
-                             SUM(((TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR)
-                                   + NVL(TO_NUMBER(at.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)) * 3
-                                  * TO_NUMBER(t.""RTU/TS"" DEFAULT 0 ON CONVERSION ERROR))
-                                 + NVL(TO_NUMBER(ar.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0))
-                               * SUM(TO_NUMBER(t.""COST/RTU"" DEFAULT 0 ON CONVERSION ERROR)) / 1000
-                               + SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS rfc_wo,
+                             (SUM(TO_NUMBER(t.rtu_plan DEFAULT 0 ON CONVERSION ERROR))
+                                + SUM(NVL(TO_NUMBER(ar.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
+                               * SUM(TO_NUMBER(t.""COST/RTU"" DEFAULT 0 ON CONVERSION ERROR)) / 1000 AS rfc_wo,
                              SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS depr,
                              SUM(NVL(TO_NUMBER(ac.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)) AS addc
-                        FROM rpt.asb_ts_actual t{AdderJoin("at", "Adder", "TS")}{AdderJoin("ar", "Adder", "RTU")}{AdderJoin("ac", "Adder", "COST")}
+                        FROM rpt.asb_ts_actual t{AdderJoin("ar", "Adder", "RTU")}{AdderJoin("ac", "Adder", "COST")}
                        WHERE t.sb = :sbName AND t.horizon = :horizon{locClause}
                        GROUP BY {labelExpr}, CASE WHEN t.quarter IS NULL THEN 0 ELSE 1 END
                     )
