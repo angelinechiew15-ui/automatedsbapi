@@ -90,7 +90,7 @@ public class ServiceBundleController : ControllerBase
     //   - clientCorridors: used for the Pareto (CLIENT_CORRIDOR) chart
     //   - labs: drives the per-lab tabs (LOC filter)
     [HttpGet("dashboard")]
-    public async Task<ActionResult> GetDashboard([FromQuery] string sbId)
+    public async Task<ActionResult> GetDashboard([FromQuery] string sbId, [FromQuery] string? horizon)
     {
         if (string.IsNullOrWhiteSpace(sbId))
         {
@@ -152,13 +152,36 @@ public class ServiceBundleController : ControllerBase
             // Resolve cloc ids -> location names from the REALIS DB.
             var labs = await ResolveLabsAsync(clocIds);
 
+            // A tab is only shown when its location has TS/RTU/COST actuals and TS
+            // demand > 0 in the data table for the selected horizon. The candidate set
+            // mirrors the tabs the frontend can render (two special tabs + the labs).
+            var isTestfloor = (sbName ?? "").ToLowerInvariant().Contains("testfloor");
+            var candidates = new List<string> { "RPT CENTRAL" };
+            if (!isTestfloor)
+            {
+                candidates.Add("RPT MUC ESD");
+            }
+            foreach (var lab in labs)
+            {
+                var text = (lab as dynamic)?.text as string;
+                if (!string.IsNullOrWhiteSpace(text) && !candidates.Contains(text))
+                {
+                    candidates.Add(text);
+                }
+            }
+
+            var validLocations = string.IsNullOrWhiteSpace(horizon)
+                ? candidates
+                : await QualifyingLocationsAsync(sbName ?? "", horizon!, candidates);
+
             return Ok(new
             {
                 success = true,
                 sbId,
                 sbName,
                 clientCorridors,
-                labs
+                labs,
+                validLocations
             });
         }
         catch (OracleException ex)
@@ -201,6 +224,65 @@ public class ServiceBundleController : ControllerBase
         }
 
         return labs;
+    }
+
+    // Returns the subset of candidate locations that have data worth a tab: i.e. the
+    // location (rolled up over its sub-area codes via the same prefix match used for
+    // charts) has non-zero TS, RTU and COST actuals AND a positive TS demand for the
+    // given SB + horizon.
+    private async Task<List<string>> QualifyingLocationsAsync(
+        string sbName, string horizon, IReadOnlyList<string> candidates)
+    {
+        if (candidates.Count == 0)
+        {
+            return new List<string>();
+        }
+
+        // One pass: per-loc sums of the four measures for this SB + horizon.
+        var sql = @"SELECT t.loc AS loc,
+                           SUM(TO_NUMBER(t.ts_actual DEFAULT 0 ON CONVERSION ERROR)) AS tsa,
+                           SUM(TO_NUMBER(t.rtu_act   DEFAULT 0 ON CONVERSION ERROR)) AS rtua,
+                           SUM(TO_NUMBER(t.cost_act  DEFAULT 0 ON CONVERSION ERROR)) AS costa,
+                           SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR)) AS tsd
+                      FROM rpt.asb_ts_actual t
+                     WHERE t.sb = :sbName AND t.horizon = :horizon AND t.loc IS NOT NULL
+                     GROUP BY t.loc";
+
+        var locSums = new List<(string Loc, double Tsa, double Rtua, double Costa, double Tsd)>();
+        await using (var conn = _factory.Create())
+        {
+            await conn.OpenAsync();
+            await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+            cmd.Parameters.Add(new OracleParameter("sbName", sbName));
+            cmd.Parameters.Add(new OracleParameter("horizon", horizon ?? (object)DBNull.Value));
+            await using var reader = await cmd.ExecuteReaderAsync();
+            double D(string c) => reader[c] == DBNull.Value ? 0d : Convert.ToDouble(reader[c]);
+            while (await reader.ReadAsync())
+            {
+                locSums.Add((reader["loc"]?.ToString() ?? "", D("tsa"), D("rtua"), D("costa"), D("tsd")));
+            }
+        }
+
+        var valid = new List<string>();
+        foreach (var c in candidates)
+        {
+            double tsa = 0, rtua = 0, costa = 0, tsd = 0;
+            foreach (var r in locSums)
+            {
+                if (r.Loc.Equals(c, StringComparison.OrdinalIgnoreCase) ||
+                    r.Loc.StartsWith(c + " ", StringComparison.OrdinalIgnoreCase))
+                {
+                    tsa += r.Tsa; rtua += r.Rtua; costa += r.Costa; tsd += r.Tsd;
+                }
+            }
+
+            if (tsa != 0 && rtua != 0 && costa != 0 && tsd > 0)
+            {
+                valid.Add(c);
+            }
+        }
+
+        return valid;
     }
 
     // GET api/service-bundle/charts?sbId=189&horizon=26-06&loc=RPT CENTRAL
