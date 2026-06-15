@@ -470,13 +470,15 @@ public class ServiceBundleController : ControllerBase
         var sql = $@"SELECT {labelExpr} AS label,
                             SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR)) AS ts_demand,
                             SUM(TO_NUMBER(t.ts_actual DEFAULT 0 ON CONVERSION ERROR)) AS ts_actual,
-                            SUM(TO_NUMBER(t.rtu_plan  DEFAULT 0 ON CONVERSION ERROR)) AS rtu_plan,
+                            ((SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR))
+                                + SUM(NVL(TO_NUMBER(ats.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
+                              * SUM(TO_NUMBER(t.""RTU/TS"" DEFAULT 0 ON CONVERSION ERROR)) * 3) AS rtu_plan,
                             SUM(TO_NUMBER(t.rtu_act   DEFAULT 0 ON CONVERSION ERROR)) AS rtu_act,
                             SUM(TO_NUMBER(t.cost_act  DEFAULT 0 ON CONVERSION ERROR)) AS cost_act,
                             SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS depr,
                             SUM(TO_NUMBER(t.""RTU/TS""  DEFAULT 0 ON CONVERSION ERROR)) AS rtu_ts,
                             SUM(TO_NUMBER(t.""COST/RTU"" DEFAULT 0 ON CONVERSION ERROR)) AS cost_rtu
-                       FROM rpt.asb_ts_actual t
+                       FROM rpt.asb_ts_actual t{AdderJoin("ats", "Adder", "TS")}
                       WHERE t.sb = :sbName AND t.horizon = :horizon AND t.loc = :loc
                       GROUP BY {labelExpr}
                       ORDER BY {labelExpr} ASC";
