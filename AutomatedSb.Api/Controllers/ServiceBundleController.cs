@@ -472,7 +472,7 @@ public class ServiceBundleController : ControllerBase
                             SUM(TO_NUMBER(t.ts_actual DEFAULT 0 ON CONVERSION ERROR)) AS ts_actual,
                             ((SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR))
                                 + SUM(NVL(TO_NUMBER(ats.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
-                              * SUM(TO_NUMBER(t.""RTU/TS"" DEFAULT 0 ON CONVERSION ERROR)) * 3) AS rtu_plan,
+                              * CAST(SUM(TO_NUMBER(t.""RTU/TS"" DEFAULT 0 ON CONVERSION ERROR)) AS BINARY_DOUBLE) * 3) AS rtu_plan,
                             SUM(TO_NUMBER(t.rtu_act   DEFAULT 0 ON CONVERSION ERROR)) AS rtu_act,
                             SUM(TO_NUMBER(t.cost_act  DEFAULT 0 ON CONVERSION ERROR)) AS cost_act,
                             SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS depr,
