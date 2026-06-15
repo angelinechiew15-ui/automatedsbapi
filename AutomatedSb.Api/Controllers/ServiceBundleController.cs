@@ -84,46 +84,6 @@ public class ServiceBundleController : ControllerBase
         }
     }
 
-    // TEMP DIAGNOSTIC: distinct loc + actual sums for an SB/horizon.
-    [HttpGet("locdiag")]
-    public async Task<ActionResult> LocDiag([FromQuery] string sbId, [FromQuery] string horizon)
-    {
-        string sbName = "";
-        await using var conn = _factory.Create();
-        await conn.OpenAsync();
-        await using (var c1 = new OracleCommand(
-            "SELECT cm_matrix_sb_name FROM cm_matrix_sb WHERE cm_matrix_sb_id = :sbId", conn)
-            { BindByName = true })
-        {
-            c1.Parameters.Add(new OracleParameter("sbId", sbId));
-            var s = await c1.ExecuteScalarAsync();
-            sbName = s == null || s == DBNull.Value ? "" : s.ToString() ?? "";
-        }
-
-        var rows = new List<object>();
-        await using var cmd = new OracleCommand(
-            @"SELECT t.loc AS loc,
-                     SUM(TO_NUMBER(t.ts_actual DEFAULT 0 ON CONVERSION ERROR)) AS tsa,
-                     SUM(TO_NUMBER(t.rtu_act   DEFAULT 0 ON CONVERSION ERROR)) AS rtua,
-                     SUM(TO_NUMBER(t.cost_act  DEFAULT 0 ON CONVERSION ERROR)) AS costa
-                FROM rpt.asb_ts_actual t
-               WHERE t.sb = :sbName AND t.horizon = :horizon
-               GROUP BY t.loc ORDER BY t.loc", conn) { BindByName = true };
-        cmd.Parameters.Add(new OracleParameter("sbName", sbName));
-        cmd.Parameters.Add(new OracleParameter("horizon", horizon ?? (object)DBNull.Value));
-        await using var reader = await cmd.ExecuteReaderAsync();
-        double D(string c) => reader[c] == DBNull.Value ? 0d : Convert.ToDouble(reader[c]);
-        while (await reader.ReadAsync())
-        {
-            rows.Add(new
-            {
-                loc = reader["loc"]?.ToString() ?? "",
-                tsa = D("tsa"), rtua = D("rtua"), costa = D("costa")
-            });
-        }
-        return Ok(new { sbName, rows });
-    }
-
     // GET api/service-bundle/dashboard?sbId=123
     // Returns the data needed to build the embedded Tableau charts for a SB:
     //   - sbName: used as the SB filter in the Tableau URLs
@@ -192,19 +152,29 @@ public class ServiceBundleController : ControllerBase
             // Resolve cloc ids -> location names from the REALIS DB.
             var labs = await ResolveLabsAsync(clocIds);
 
-            // A tab is only shown when its location has TS/RTU/COST actuals and TS
-            // demand > 0 in the data table for the selected horizon. The candidate set
-            // mirrors the tabs the frontend can render (two special tabs + the labs).
+            // Tab roots that roll their sub-area codes up: RPT CENTRAL + the mapped
+            // labs. The full tab list is data-driven (see QualifyingLocationsAsync):
+            // a location appears when it has a non-zero TS/RTU/COST actual.
             var isTestfloor = (sbName ?? "").ToLowerInvariant().Contains("testfloor");
+            var labRoots = new List<string>();
+            foreach (var lab in labs)
+            {
+                var text = (lab as dynamic)?.text as string;
+                if (!string.IsNullOrWhiteSpace(text) && !labRoots.Contains(text))
+                {
+                    labRoots.Add(text);
+                }
+            }
+
+            // Static fallback used only when no horizon is selected (no data to scan).
             var candidates = new List<string> { "RPT CENTRAL" };
             if (!isTestfloor)
             {
                 candidates.Add("RPT MUC ESD");
             }
-            foreach (var lab in labs)
+            foreach (var text in labRoots)
             {
-                var text = (lab as dynamic)?.text as string;
-                if (!string.IsNullOrWhiteSpace(text) && !candidates.Contains(text))
+                if (!candidates.Contains(text))
                 {
                     candidates.Add(text);
                 }
@@ -212,7 +182,7 @@ public class ServiceBundleController : ControllerBase
 
             var validLocations = string.IsNullOrWhiteSpace(horizon)
                 ? candidates
-                : await QualifyingLocationsAsync(sbName ?? "", horizon!, candidates);
+                : await QualifyingLocationsAsync(sbName ?? "", horizon!, labRoots);
 
             return Ok(new
             {
@@ -266,17 +236,14 @@ public class ServiceBundleController : ControllerBase
         return labs;
     }
 
-    // Returns the subset of candidate locations that have data worth a tab: i.e. the
-    // location (rolled up over its sub-area codes via the same prefix match used for
-    // charts) has a non-zero TS, RTU or COST actual for the given SB + horizon.
+    // Returns the ordered list of location tabs to render for the given SB + horizon.
+    // Driven by the data: a location qualifies when it has a non-zero TS, RTU or COST
+    // actual. RPT CENTRAL and the mapped labs are "roots" that roll their sub-area
+    // codes up (same prefix match used for charts); any other RPT-prefixed location
+    // with actuals is shown as its own tab.
     private async Task<List<string>> QualifyingLocationsAsync(
-        string sbName, string horizon, IReadOnlyList<string> candidates)
+        string sbName, string horizon, IReadOnlyList<string> labRoots)
     {
-        if (candidates.Count == 0)
-        {
-            return new List<string>();
-        }
-
         // One pass: per-loc sums of the actual measures for this SB + horizon.
         var sql = @"SELECT t.loc AS loc,
                            SUM(TO_NUMBER(t.ts_actual DEFAULT 0 ON CONVERSION ERROR)) AS tsa,
@@ -301,26 +268,51 @@ public class ServiceBundleController : ControllerBase
             }
         }
 
-        var valid = new List<string>();
-        foreach (var c in candidates)
+        // Roots that roll sub-area codes up, in display order.
+        var roots = new List<string> { "RPT CENTRAL" };
+        foreach (var r in labRoots)
+        {
+            if (!string.IsNullOrWhiteSpace(r) &&
+                !roots.Contains(r, StringComparer.OrdinalIgnoreCase))
+            {
+                roots.Add(r);
+            }
+        }
+
+        var result = new List<string>();
+        var covered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // 1. Qualifying roots first (RPT CENTRAL, then the mapped labs).
+        foreach (var root in roots)
         {
             double tsa = 0, rtua = 0, costa = 0;
             foreach (var r in locSums)
             {
-                if (r.Loc.Equals(c, StringComparison.OrdinalIgnoreCase) ||
-                    r.Loc.StartsWith(c + " ", StringComparison.OrdinalIgnoreCase))
+                if (r.Loc.Equals(root, StringComparison.OrdinalIgnoreCase) ||
+                    r.Loc.StartsWith(root + " ", StringComparison.OrdinalIgnoreCase))
                 {
                     tsa += r.Tsa; rtua += r.Rtua; costa += r.Costa;
+                    covered.Add(r.Loc);
                 }
             }
 
             if (tsa != 0 || rtua != 0 || costa != 0)
             {
-                valid.Add(c);
+                result.Add(root);
             }
         }
 
-        return valid;
+        // 2. Any remaining RPT-prefixed location with actuals, as its own tab.
+        foreach (var r in locSums
+                     .Where(x => !covered.Contains(x.Loc))
+                     .Where(x => x.Loc.StartsWith("RPT ", StringComparison.OrdinalIgnoreCase))
+                     .Where(x => x.Tsa != 0 || x.Rtua != 0 || x.Costa != 0)
+                     .OrderBy(x => x.Loc, StringComparer.OrdinalIgnoreCase))
+        {
+            result.Add(r.Loc);
+        }
+
+        return result;
     }
 
     // GET api/service-bundle/charts?sbId=189&horizon=26-06&loc=RPT CENTRAL
