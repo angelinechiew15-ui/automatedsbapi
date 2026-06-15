@@ -353,7 +353,9 @@ public class ServiceBundleController : ControllerBase
                      AND {alias}.cm_matrix_adder_for = '{adderFor}'";
 
     // Cost-demand components per fiscal quarter:
-    //   rfc_wo = (SUM(rtu_plan) + SUM(adder_rtu)) * SUM("COST/RTU") / 1000
+    //   rtu_rfc = (SUM(ts_demand) + SUM(adder_ts)) * SUM("RTU/TS") * 3
+    //             i.e. (TSpM RFC Demand w/o adder + TS adder) * RTU/TS * 3  ("RTU RFC demand")
+    //   rfc_wo = rtu_rfc * SUM("COST/RTU") / 1000
     //            i.e. (RTU RFC demand * cost/rtu) / 1000  ("Cost RFC w/o Depreciation")
     //   depr   = SUM(depreciation)                            ("Cost RFC Depreciation")
     //   addc   = SUM(adder_cost)                              ("Adder Value Cost Demand")
@@ -369,12 +371,13 @@ public class ServiceBundleController : ControllerBase
                     FROM (
                       SELECT {labelExpr} AS label,
                              CASE WHEN t.quarter IS NULL THEN 0 ELSE 1 END AS isq,
-                             (SUM(TO_NUMBER(t.rtu_plan DEFAULT 0 ON CONVERSION ERROR))
-                                + SUM(NVL(TO_NUMBER(ar.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
+                             ((SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR))
+                                 + SUM(NVL(TO_NUMBER(ats.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
+                               * SUM(TO_NUMBER(t.""RTU/TS"" DEFAULT 0 ON CONVERSION ERROR)) * 3)
                                * SUM(TO_NUMBER(t.""COST/RTU"" DEFAULT 0 ON CONVERSION ERROR)) / 1000 AS rfc_wo,
                              SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS depr,
                              SUM(NVL(TO_NUMBER(ac.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)) AS addc
-                        FROM rpt.asb_ts_actual t{AdderJoin("ar", "Adder", "RTU")}{AdderJoin("ac", "Adder", "COST")}
+                        FROM rpt.asb_ts_actual t{AdderJoin("ats", "Adder", "TS")}{AdderJoin("ac", "Adder", "COST")}
                        WHERE t.sb = :sbName AND t.horizon = :horizon{locClause}
                        GROUP BY {labelExpr}, CASE WHEN t.quarter IS NULL THEN 0 ELSE 1 END
                     )
