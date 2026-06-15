@@ -228,8 +228,7 @@ public class ServiceBundleController : ControllerBase
 
     // Returns the subset of candidate locations that have data worth a tab: i.e. the
     // location (rolled up over its sub-area codes via the same prefix match used for
-    // charts) has non-zero TS, RTU and COST actuals AND a positive TS demand for the
-    // given SB + horizon.
+    // charts) has a non-zero TS, RTU or COST actual for the given SB + horizon.
     private async Task<List<string>> QualifyingLocationsAsync(
         string sbName, string horizon, IReadOnlyList<string> candidates)
     {
@@ -238,17 +237,16 @@ public class ServiceBundleController : ControllerBase
             return new List<string>();
         }
 
-        // One pass: per-loc sums of the four measures for this SB + horizon.
+        // One pass: per-loc sums of the actual measures for this SB + horizon.
         var sql = @"SELECT t.loc AS loc,
                            SUM(TO_NUMBER(t.ts_actual DEFAULT 0 ON CONVERSION ERROR)) AS tsa,
                            SUM(TO_NUMBER(t.rtu_act   DEFAULT 0 ON CONVERSION ERROR)) AS rtua,
-                           SUM(TO_NUMBER(t.cost_act  DEFAULT 0 ON CONVERSION ERROR)) AS costa,
-                           SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR)) AS tsd
+                           SUM(TO_NUMBER(t.cost_act  DEFAULT 0 ON CONVERSION ERROR)) AS costa
                       FROM rpt.asb_ts_actual t
                      WHERE t.sb = :sbName AND t.horizon = :horizon AND t.loc IS NOT NULL
                      GROUP BY t.loc";
 
-        var locSums = new List<(string Loc, double Tsa, double Rtua, double Costa, double Tsd)>();
+        var locSums = new List<(string Loc, double Tsa, double Rtua, double Costa)>();
         await using (var conn = _factory.Create())
         {
             await conn.OpenAsync();
@@ -259,24 +257,24 @@ public class ServiceBundleController : ControllerBase
             double D(string c) => reader[c] == DBNull.Value ? 0d : Convert.ToDouble(reader[c]);
             while (await reader.ReadAsync())
             {
-                locSums.Add((reader["loc"]?.ToString() ?? "", D("tsa"), D("rtua"), D("costa"), D("tsd")));
+                locSums.Add((reader["loc"]?.ToString() ?? "", D("tsa"), D("rtua"), D("costa")));
             }
         }
 
         var valid = new List<string>();
         foreach (var c in candidates)
         {
-            double tsa = 0, rtua = 0, costa = 0, tsd = 0;
+            double tsa = 0, rtua = 0, costa = 0;
             foreach (var r in locSums)
             {
                 if (r.Loc.Equals(c, StringComparison.OrdinalIgnoreCase) ||
                     r.Loc.StartsWith(c + " ", StringComparison.OrdinalIgnoreCase))
                 {
-                    tsa += r.Tsa; rtua += r.Rtua; costa += r.Costa; tsd += r.Tsd;
+                    tsa += r.Tsa; rtua += r.Rtua; costa += r.Costa;
                 }
             }
 
-            if (tsa != 0 && rtua != 0 && costa != 0 && tsd > 0)
+            if (tsa != 0 || rtua != 0 || costa != 0)
             {
                 valid.Add(c);
             }
