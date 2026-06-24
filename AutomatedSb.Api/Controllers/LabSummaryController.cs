@@ -47,30 +47,30 @@ public class LabSummaryController : ControllerBase
                    t.loc       AS location,
                    t.horizon,
                    t.sb,
-                   SUM(TO_NUMBER(t.ts_demand     DEFAULT 0 ON CONVERSION ERROR))                                                                       AS ts_demand,
-                   SUM(NVL(TO_NUMBER(a_ts.cm_matrix_adder_value  DEFAULT 0 ON CONVERSION ERROR), 0))                                                   AS adder_ts,
-                   SUM(TO_NUMBER(t.ts_actual     DEFAULT 0 ON CONVERSION ERROR))                                                                       AS ts_actual,
-                   SUM(NVL(TO_NUMBER(c_ts.cm_matrix_adder_value  DEFAULT 0 ON CONVERSION ERROR), 0))                                                   AS change_ts,
-                   ((SUM(TO_NUMBER(t.ts_demand   DEFAULT 0 ON CONVERSION ERROR))
-                       + SUM(NVL(TO_NUMBER(a_ts.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
-                    * SUM(TO_NUMBER(t.""RTU/TS""  DEFAULT 0 ON CONVERSION ERROR)) * 3)                                                                 AS rtu_rfc_demand,
-                   SUM(NVL(TO_NUMBER(a_rtu.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0))                                                   AS adder_rtu,
-                   SUM(TO_NUMBER(t.""RTU/TS""     DEFAULT 0 ON CONVERSION ERROR))                                                                      AS rtu_ts,
-                   SUM(TO_NUMBER(t.rtu_act       DEFAULT 0 ON CONVERSION ERROR))                                                                       AS rtu_actual,
-                   SUM(NVL(TO_NUMBER(c_rtu.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0))                                                   AS change_rtu,
-                   ((SUM(TO_NUMBER(t.ts_demand   DEFAULT 0 ON CONVERSION ERROR))
-                       + SUM(NVL(TO_NUMBER(a_ts.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
-                    * SUM(TO_NUMBER(t.""RTU/TS""  DEFAULT 0 ON CONVERSION ERROR)) * 3)
-                   * SUM(TO_NUMBER(t.""COST/RTU"" DEFAULT 0 ON CONVERSION ERROR)) / 1000                                                               AS cost_rfc_wo_depr,
-                   SUM(TO_NUMBER(t.depreciation  DEFAULT 0 ON CONVERSION ERROR))                                                                       AS depreciation,
-                   ((SUM(TO_NUMBER(t.ts_demand   DEFAULT 0 ON CONVERSION ERROR))
-                       + SUM(NVL(TO_NUMBER(a_ts.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
-                    * SUM(TO_NUMBER(t.""RTU/TS""  DEFAULT 0 ON CONVERSION ERROR)) * 3)
-                   * SUM(TO_NUMBER(t.""COST/RTU"" DEFAULT 0 ON CONVERSION ERROR)) / 1000
-                   + SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR))                                                                      AS cost_rfc_demand,
-                   SUM(NVL(TO_NUMBER(a_cost.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0))                                                  AS adder_cost,
-                   SUM(TO_NUMBER(t.""COST/RTU""   DEFAULT 0 ON CONVERSION ERROR))                                                                      AS cost_rtu,
-                   SUM(TO_NUMBER(t.cost_act      DEFAULT 0 ON CONVERSION ERROR))                                                                       AS cost_actual
+                   CAST(SUM(TO_NUMBER(t.ts_demand     DEFAULT 0 ON CONVERSION ERROR))                                                                         AS BINARY_DOUBLE) AS ts_demand,
+                   CAST(SUM(NVL(TO_NUMBER(a_ts.cm_matrix_adder_value  DEFAULT 0 ON CONVERSION ERROR), 0))                                                     AS BINARY_DOUBLE) AS adder_ts,
+                   CAST(SUM(TO_NUMBER(t.ts_actual     DEFAULT 0 ON CONVERSION ERROR))                                                                         AS BINARY_DOUBLE) AS ts_actual,
+                   CAST(SUM(NVL(TO_NUMBER(c_ts.cm_matrix_adder_value  DEFAULT 0 ON CONVERSION ERROR), 0))                                                     AS BINARY_DOUBLE) AS change_ts,
+                   CAST(((SUM(TO_NUMBER(t.ts_demand   DEFAULT 0 ON CONVERSION ERROR))
+                           + SUM(NVL(TO_NUMBER(a_ts.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
+                          * SUM(TO_NUMBER(t.""RTU/TS"" DEFAULT 0 ON CONVERSION ERROR)) * 3)                                                                    AS BINARY_DOUBLE) AS rtu_rfc_demand,
+                   CAST(SUM(NVL(TO_NUMBER(a_rtu.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0))                                                     AS BINARY_DOUBLE) AS adder_rtu,
+                   CAST(SUM(TO_NUMBER(t.""RTU/TS""     DEFAULT 0 ON CONVERSION ERROR))                                                                        AS BINARY_DOUBLE) AS rtu_ts,
+                   CAST(SUM(TO_NUMBER(t.rtu_act       DEFAULT 0 ON CONVERSION ERROR))                                                                         AS BINARY_DOUBLE) AS rtu_actual,
+                   CAST(SUM(NVL(TO_NUMBER(c_rtu.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0))                                                     AS BINARY_DOUBLE) AS change_rtu,
+                   CAST(((SUM(TO_NUMBER(t.ts_demand   DEFAULT 0 ON CONVERSION ERROR))
+                           + SUM(NVL(TO_NUMBER(a_ts.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
+                          * SUM(TO_NUMBER(t.""RTU/TS"" DEFAULT 0 ON CONVERSION ERROR)) * 3)
+                         * SUM(TO_NUMBER(t.""COST/RTU"" DEFAULT 0 ON CONVERSION ERROR)) / 1000                                                                 AS BINARY_DOUBLE) AS cost_rfc_wo_depr,
+                   CAST(SUM(TO_NUMBER(t.depreciation  DEFAULT 0 ON CONVERSION ERROR))                                                                         AS BINARY_DOUBLE) AS depreciation,
+                   CAST(((SUM(TO_NUMBER(t.ts_demand   DEFAULT 0 ON CONVERSION ERROR))
+                           + SUM(NVL(TO_NUMBER(a_ts.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
+                          * SUM(TO_NUMBER(t.""RTU/TS"" DEFAULT 0 ON CONVERSION ERROR)) * 3)
+                         * SUM(TO_NUMBER(t.""COST/RTU"" DEFAULT 0 ON CONVERSION ERROR)) / 1000
+                         + SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR))                                                                        AS BINARY_DOUBLE) AS cost_rfc_demand,
+                   CAST(SUM(NVL(TO_NUMBER(a_cost.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0))                                                    AS BINARY_DOUBLE) AS adder_cost,
+                   CAST(SUM(TO_NUMBER(t.""COST/RTU""   DEFAULT 0 ON CONVERSION ERROR))                                                                        AS BINARY_DOUBLE) AS cost_rtu,
+                   CAST(SUM(TO_NUMBER(t.cost_act      DEFAULT 0 ON CONVERSION ERROR))                                                                         AS BINARY_DOUBLE) AS cost_actual
               FROM rpt.asb_ts_actual t{AdderJoin("a_ts",   "Adder",  "TS")}{AdderJoin("c_ts",   "Change", "TS")}{AdderJoin("a_rtu",  "Adder",  "RTU")}{AdderJoin("c_rtu",  "Change", "RTU")}{AdderJoin("a_cost", "Adder",  "COST")}
              WHERE t.horizon = :horizon
                AND t.loc IS NOT NULL
