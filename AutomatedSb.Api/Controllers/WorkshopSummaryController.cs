@@ -96,24 +96,17 @@ public class WorkshopSummaryController : ControllerBase
             SELECT
                 d.cm_matrix_sb_div_name                           AS div_name,
                 d.cm_matrix_sb_div_bl                             AS sub_div,
-                s.cm_matrix_sb_name                               AS sb,
+                s.cm_matrix_sb_name                               AS sb_name,
                 hh.cm_matrix_sb_approval_sb_status                AS sb_status,
-                ss.cm_matrix_sb_ws_sb_comment                     AS comment,
-                ss.cm_matrix_sb_ws_sb_demand_driver               AS demand_driver,
-                ss.cm_matrix_sb_ws_sb_cost_driver                 AS cost_driver,
-                sss.cm_matrix_sb_ws_sb_comment                    AS summary,
-                CAST(SUM(TO_NUMBER(v.ts_demand   DEFAULT 0 ON CONVERSION ERROR)) AS BINARY_DOUBLE) AS ts_demand,
-                CAST(SUM(
-                    (TO_NUMBER(v.ts_demand   DEFAULT 0 ON CONVERSION ERROR)
-                     + 0)   -- adder placeholder; adder join omitted for simplicity
-                    * TO_NUMBER(v.""RTU/TS""  DEFAULT 0 ON CONVERSION ERROR) * 3
-                ) AS BINARY_DOUBLE) AS rtu_demand,
-                CAST(SUM(
-                    (TO_NUMBER(v.ts_demand   DEFAULT 0 ON CONVERSION ERROR))
-                    * TO_NUMBER(v.""RTU/TS""  DEFAULT 0 ON CONVERSION ERROR) * 3
-                    * TO_NUMBER(v.""COST/RTU"" DEFAULT 0 ON CONVERSION ERROR) / 1000
-                    + TO_NUMBER(v.depreciation DEFAULT 0 ON CONVERSION ERROR)
-                ) AS BINARY_DOUBLE) AS cost_demand
+                ss.cm_matrix_sb_ws_sb_comment                     AS sb_comment,
+                sss.cm_matrix_sb_ws_sb_comment                    AS div_summary,
+                CAST(SUM(NVL(TO_NUMBER(v.TS_DEMAND DEFAULT NULL ON CONVERSION ERROR), 0)) AS BINARY_DOUBLE) AS ts_demand,
+                CAST(SUM(NVL(TO_NUMBER(v.TS_DEMAND DEFAULT NULL ON CONVERSION ERROR), 0)
+                         * NVL(TO_NUMBER(v.RTU_TS  DEFAULT NULL ON CONVERSION ERROR), 0) * 3) AS BINARY_DOUBLE) AS rtu_demand,
+                CAST(SUM(NVL(TO_NUMBER(v.TS_DEMAND DEFAULT NULL ON CONVERSION ERROR), 0)
+                         * NVL(TO_NUMBER(v.RTU_TS  DEFAULT NULL ON CONVERSION ERROR), 0) * 3
+                         * NVL(TO_NUMBER(v.COST_RTU DEFAULT NULL ON CONVERSION ERROR), 0) / 1000
+                         + NVL(TO_NUMBER(v.DEPRECIATION DEFAULT NULL ON CONVERSION ERROR), 0)) AS BINARY_DOUBLE) AS cost_demand
             FROM
                 cm_matrix_sb s
                 INNER JOIN cm_matrix_sb_div d
@@ -142,8 +135,6 @@ public class WorkshopSummaryController : ControllerBase
                 s.cm_matrix_sb_name,
                 hh.cm_matrix_sb_approval_sb_status,
                 ss.cm_matrix_sb_ws_sb_comment,
-                ss.cm_matrix_sb_ws_sb_demand_driver,
-                ss.cm_matrix_sb_ws_sb_cost_driver,
                 sss.cm_matrix_sb_ws_sb_comment
             ORDER BY
                 d.cm_matrix_sb_div_name ASC,
@@ -166,17 +157,15 @@ public class WorkshopSummaryController : ControllerBase
             {
                 result.Add(new
                 {
-                    divName      = reader["div_name"]?.ToString()    ?? "",
-                    subDiv       = reader["sub_div"]?.ToString()     ?? "",
-                    sb           = reader["sb"]?.ToString()          ?? "",
-                    sbStatus     = reader["sb_status"]?.ToString()   ?? "",
-                    comment      = reader["comment"]?.ToString()     ?? "",
-                    demandDriver = reader["demand_driver"]?.ToString() ?? "",
-                    costDriver   = reader["cost_driver"]?.ToString() ?? "",
-                    summary      = reader["summary"]?.ToString()     ?? "",
-                    tsDemand     = Dbl(reader["ts_demand"]),
-                    rtuDemand    = Dbl(reader["rtu_demand"]),
-                    costDemand   = Dbl(reader["cost_demand"]),
+                    divName    = reader["div_name"]?.ToString()    ?? "",
+                    subDiv     = reader["sub_div"]?.ToString()     ?? "",
+                    sb         = reader["sb_name"]?.ToString()     ?? "",
+                    sbStatus   = reader["sb_status"]?.ToString()   ?? "",
+                    comment    = reader["sb_comment"]?.ToString()  ?? "",
+                    summary    = reader["div_summary"]?.ToString() ?? "",
+                    tsDemand   = Dbl(reader["ts_demand"]),
+                    rtuDemand  = Dbl(reader["rtu_demand"]),
+                    costDemand = Dbl(reader["cost_demand"]),
                 });
             }
 
