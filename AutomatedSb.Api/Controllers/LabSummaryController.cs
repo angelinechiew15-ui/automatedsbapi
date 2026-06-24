@@ -127,4 +127,60 @@ public class LabSummaryController : ControllerBase
             return StatusCode(500, new { success = false, message = ex.Message });
         }
     }
+
+    // GET api/lab-summary/filter-options?horizon=26-06
+    // Returns distinct FY Quarter, Location, and SB values for the given horizon.
+    [HttpGet("filter-options")]
+    public async Task<ActionResult> GetFilterOptions([FromQuery] string? horizon)
+    {
+        if (string.IsNullOrWhiteSpace(horizon))
+            return BadRequest(new { success = false, message = "horizon is required" });
+
+        const string sql = @"
+            SELECT DISTINCT
+                   CASE WHEN quarter IS NULL THEN fy ELSE fy || ' ' || quarter END AS fy_quarter,
+                   loc AS location,
+                   sb
+              FROM rpt.asb_ts_actual
+             WHERE horizon = :horizon
+               AND loc IS NOT NULL
+               AND sb  IS NOT NULL
+             ORDER BY 1, 2, 3";
+
+        try
+        {
+            await using var conn = _factory.Create();
+            await conn.OpenAsync();
+            await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+            cmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = horizon });
+
+            await using var reader = await cmd.ExecuteReaderAsync();
+
+            var fyQuarters = new SortedSet<string>();
+            var locations  = new SortedSet<string>();
+            var sbs        = new SortedSet<string>();
+
+            while (await reader.ReadAsync())
+            {
+                var q = reader["fy_quarter"]?.ToString();
+                var l = reader["location"]?.ToString();
+                var s = reader["sb"]?.ToString();
+                if (!string.IsNullOrEmpty(q)) fyQuarters.Add(q);
+                if (!string.IsNullOrEmpty(l)) locations.Add(l);
+                if (!string.IsNullOrEmpty(s)) sbs.Add(s);
+            }
+
+            return Ok(new
+            {
+                fyQuarters = fyQuarters.ToList(),
+                locations  = locations.ToList(),
+                sbs        = sbs.ToList(),
+            });
+        }
+        catch (OracleException ex)
+        {
+            _logger.LogError(ex, "LabSummary.GetFilterOptions failed for horizon {Horizon}", horizon);
+            return StatusCode(500, new { success = false, message = ex.Message });
+        }
+    }
 }
