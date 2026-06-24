@@ -128,22 +128,18 @@ public class LabSummaryController : ControllerBase
         }
     }
 
-    // GET api/lab-summary/filter-options?horizon=26-06
-    // Returns distinct FY Quarter, Location, and SB values for the given horizon.
+    // GET api/lab-summary/filter-options
+    // Returns all distinct FY Quarter, Location, and SB values (across all horizons).
     [HttpGet("filter-options")]
-    public async Task<ActionResult> GetFilterOptions([FromQuery] string? horizon)
+    public async Task<ActionResult> GetFilterOptions()
     {
-        if (string.IsNullOrWhiteSpace(horizon))
-            return BadRequest(new { success = false, message = "horizon is required" });
-
         const string sql = @"
             SELECT DISTINCT
                    CASE WHEN quarter IS NULL THEN fy ELSE fy || ' ' || quarter END AS fy_quarter,
                    loc AS location,
                    sb
               FROM rpt.asb_ts_actual
-             WHERE horizon = :horizon
-               AND loc IS NOT NULL
+             WHERE loc IS NOT NULL
                AND sb  IS NOT NULL
              ORDER BY 1, 2, 3";
 
@@ -152,7 +148,6 @@ public class LabSummaryController : ControllerBase
             await using var conn = _factory.Create();
             await conn.OpenAsync();
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
-            cmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = horizon });
 
             await using var reader = await cmd.ExecuteReaderAsync();
 
@@ -179,7 +174,7 @@ public class LabSummaryController : ControllerBase
         }
         catch (OracleException ex)
         {
-            _logger.LogError(ex, "LabSummary.GetFilterOptions failed for horizon {Horizon}", horizon);
+            _logger.LogError(ex, "LabSummary.GetFilterOptions failed");
             return StatusCode(500, new { success = false, message = ex.Message });
         }
     }
