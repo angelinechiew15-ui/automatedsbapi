@@ -37,8 +37,11 @@ public class LabCostController : ControllerBase
         //   (mirrors Tableau FIXED LOD: Group RTU RFC Demand * Group COST/RTU / 1000)
         // Total cost per quarter = Cost RFC w/o Dep + DEPRECIATION + ADDER_COST
         // Final value = AVG of the quarterly cost across all quarters in the FY
+        // sb name is looked up from cm_matrix_sb (sb field in v_sb_asb_data is the sb name key)
         const string sql = @"
-            SELECT location, sb, fy, AVG(cost_value) AS value
+            SELECT q.location, q.sb,
+                   NVL(s.cm_matrix_sb_name, q.sb) AS sbname,
+                   q.fy, AVG(q.cost_value) AS value
             FROM (
                 SELECT
                     loc AS location,
@@ -58,8 +61,9 @@ public class LabCostController : ControllerBase
                   AND fy      IS NOT NULL
                 GROUP BY loc, sb, fy, quarter
             ) q
-            GROUP BY location, sb, fy
-            ORDER BY location ASC, sb ASC, fy ASC";
+            LEFT JOIN cm_matrix_sb s ON s.cm_matrix_sb_name = q.sb
+            GROUP BY q.location, q.sb, s.cm_matrix_sb_name, q.fy
+            ORDER BY q.location ASC, q.sb ASC, q.fy ASC";
 
         try
         {
@@ -82,6 +86,7 @@ public class LabCostController : ControllerBase
                 {
                     location = reader["location"]?.ToString() ?? "",
                     sb       = reader["sb"]?.ToString()       ?? "",
+                    sbname   = reader["sbname"]?.ToString()   ?? "",
                     fy       = reader["fy"]?.ToString()       ?? "",
                     value
                 });
