@@ -102,10 +102,10 @@ public class WorkshopSummaryController : ControllerBase
                 sss.cm_matrix_sb_ws_sb_comment                    AS div_summary,
                 CAST(SUM(NVL(TO_NUMBER(v.TS_DEMAND DEFAULT NULL ON CONVERSION ERROR), 0)) AS BINARY_DOUBLE) AS ts_demand,
                 CAST(SUM(NVL(TO_NUMBER(v.TS_DEMAND DEFAULT NULL ON CONVERSION ERROR), 0)
-                         * NVL(TO_NUMBER(v.RTU_TS  DEFAULT NULL ON CONVERSION ERROR), 0) * 3) AS BINARY_DOUBLE) AS rtu_demand,
+                         * NVL(v.rtu_ts, 0) * 3) AS BINARY_DOUBLE) AS rtu_demand,
                 CAST(SUM(NVL(TO_NUMBER(v.TS_DEMAND DEFAULT NULL ON CONVERSION ERROR), 0)
-                         * NVL(TO_NUMBER(v.RTU_TS  DEFAULT NULL ON CONVERSION ERROR), 0) * 3
-                         * NVL(TO_NUMBER(v.COST_RTU DEFAULT NULL ON CONVERSION ERROR), 0) / 1000
+                         * NVL(v.rtu_ts, 0) * 3
+                         * NVL(TO_NUMBER(v.""COST/RTU"" DEFAULT NULL ON CONVERSION ERROR), 0) / 1000
                          + NVL(TO_NUMBER(v.DEPRECIATION DEFAULT NULL ON CONVERSION ERROR), 0)) AS BINARY_DOUBLE) AS cost_demand
             FROM
                 cm_matrix_sb s
