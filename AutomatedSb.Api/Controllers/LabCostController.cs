@@ -35,7 +35,7 @@ public class LabCostController : ControllerBase
 
         const string sql = @"
             SELECT
-                rptloc                                                          AS location,
+                loc                                                             AS location,
                 sb                                                              AS sb,
                 fy                                                              AS fy,
                 AVG(
@@ -45,11 +45,11 @@ public class LabCostController : ControllerBase
                 )                                                               AS value
             FROM v_sb_asb_data
             WHERE horizon = :horizon
-              AND rptloc IS NOT NULL
-              AND sb     IS NOT NULL
-              AND fy     IS NOT NULL
-            GROUP BY rptloc, sb, fy
-            ORDER BY rptloc ASC, sb ASC, fy ASC";
+              AND loc IS NOT NULL
+              AND sb  IS NOT NULL
+              AND fy  IS NOT NULL
+            GROUP BY loc, sb, fy
+            ORDER BY loc ASC, sb ASC, fy ASC";
 
         try
         {
