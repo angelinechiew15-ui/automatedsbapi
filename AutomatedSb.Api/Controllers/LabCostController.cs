@@ -44,22 +44,23 @@ public class LabCostController : ControllerBase
                    q.fy, AVG(q.cost_value) AS value
             FROM (
                 SELECT
-                    loc AS location,
-                    sb,
-                    fy,
-                    quarter,
+                    g.loc       AS location,
+                    g.sb,
+                    g.fy,
+                    g.FY_Quarter,
                     CASE
-                        WHEN SUM(rtu_plan) IS NULL OR SUM(""COST/RTU"") IS NULL THEN 0
-                        ELSE SUM(rtu_plan) * SUM(""COST/RTU"") / 1000
-                    END
-                    + NVL(SUM(depreciation), 0)
-                    + NVL(SUM(adder_cost),   0)  AS cost_value
-                FROM v_sb_asb_data
-                WHERE horizon = :horizon
-                  AND loc     IS NOT NULL
-                  AND sb      IS NOT NULL
-                  AND fy      IS NOT NULL
-                GROUP BY loc, sb, fy, quarter
+                        WHEN g.FY_Quarter LIKE '%Q%'
+                        THEN (SUM(((g.TS_DEMAND + g.ADDER_TS) * 3 * NVL(g.rtu_ts, g.""RTU/TS"")) + g.ADDER_RTU)
+                             * SUM(g.""COST/RTU"") / 1000) + SUM(g.DEPRECIATION) + SUM(g.ADDER_COST)
+                        ELSE ((SUM(((g.TS_DEMAND + g.ADDER_TS) * 3 * NVL(g.rtu_ts, g.""RTU/TS"")) + g.ADDER_RTU)
+                              * SUM(g.""COST/RTU"") / 1000) + SUM(g.DEPRECIATION) + SUM(g.ADDER_COST)) * 4
+                    END AS cost_value
+                FROM v_sb_asb_data g
+                WHERE g.horizon = :horizon
+                  AND g.loc     IS NOT NULL
+                  AND g.sb      IS NOT NULL
+                  AND g.fy      IS NOT NULL
+                GROUP BY g.loc, g.sb, g.fy, g.FY_Quarter
             ) q
             LEFT JOIN cm_matrix_sb s ON s.cm_matrix_sb_name = q.sb
             GROUP BY q.location, q.sb, s.cm_matrix_sb_name, q.fy
