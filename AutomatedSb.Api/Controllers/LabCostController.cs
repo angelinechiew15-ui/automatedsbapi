@@ -41,7 +41,7 @@ public class LabCostController : ControllerBase
         const string sql = @"
             SELECT q.location, q.sb,
                    NVL(s.cm_matrix_sb_name, q.sb) AS sbname,
-                   q.fy, AVG(q.cost_value) AS value
+                   q.fy, SUM(q.cost_value) AS value
             FROM (
                 SELECT
                     g.loc       AS location,
