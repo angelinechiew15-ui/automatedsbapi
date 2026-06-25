@@ -182,6 +182,66 @@ public class WorkshopSummaryController : ControllerBase
         }
     }
 
+    // GET api/workshop-summary/filter-options — all (divName, sb) pairs for preloading filters
+    [HttpGet("filter-options")]
+    public async Task<ActionResult> GetFilterOptions()
+    {
+        const string sql = @"
+            SELECT d.cm_matrix_sb_div_name AS div_name,
+                   s.cm_matrix_sb_name     AS sb_name
+              FROM cm_matrix_sb s
+              INNER JOIN cm_matrix_sb_div d
+                  ON s.cm_matrix_sb_div_name = d.cm_matrix_sb_div_id
+             WHERE s.cm_matrix_sb_valid = 'Y'
+             ORDER BY d.cm_matrix_sb_div_name ASC, s.cm_matrix_sb_name ASC";
+        try
+        {
+            await using var conn = _factory.Create();
+            await conn.OpenAsync();
+            await using var cmd = new OracleCommand(sql, conn);
+            await using var reader = await cmd.ExecuteReaderAsync();
+            var result = new List<object>();
+            while (await reader.ReadAsync())
+                result.Add(new { div = reader["div_name"]?.ToString() ?? "", sb = reader["sb_name"]?.ToString() ?? "" });
+            return Ok(result);
+        }
+        catch (OracleException ex)
+        {
+            _logger.LogError(ex, "Workshop GetFilterOptions failed");
+            return StatusCode(500, new { success = false, message = ex.Message });
+        }
+    }
+
+    // GET api/workshop-summary/filter-options — all (divName, sb) pairs for preloading filters
+    [HttpGet("filter-options")]
+    public async Task<ActionResult> GetFilterOptions()
+    {
+        const string sql = @"
+            SELECT d.cm_matrix_sb_div_name AS div_name,
+                   s.cm_matrix_sb_name     AS sb_name
+              FROM cm_matrix_sb s
+              INNER JOIN cm_matrix_sb_div d
+                  ON s.cm_matrix_sb_div_name = d.cm_matrix_sb_div_id
+             WHERE s.cm_matrix_sb_valid = 'Y'
+             ORDER BY d.cm_matrix_sb_div_name ASC, s.cm_matrix_sb_name ASC";
+        try
+        {
+            await using var conn = _factory.Create();
+            await conn.OpenAsync();
+            await using var cmd = new OracleCommand(sql, conn);
+            await using var reader = await cmd.ExecuteReaderAsync();
+            var result = new List<object>();
+            while (await reader.ReadAsync())
+                result.Add(new { div = reader["div_name"]?.ToString() ?? "", sb = reader["sb_name"]?.ToString() ?? "" });
+            return Ok(result);
+        }
+        catch (OracleException ex)
+        {
+            _logger.LogError(ex, "Workshop GetFilterOptions failed");
+            return StatusCode(500, new { success = false, message = ex.Message });
+        }
+    }
+
     // GET api/workshop-summary/sb-options
     [HttpGet("sb-options")]
     public async Task<ActionResult> GetSbOptions()
