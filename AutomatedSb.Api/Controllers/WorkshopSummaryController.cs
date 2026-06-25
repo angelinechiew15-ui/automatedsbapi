@@ -181,4 +181,165 @@ public class WorkshopSummaryController : ControllerBase
             return StatusCode(500, new { success = false, message = ex.Message });
         }
     }
+
+    // GET api/workshop-summary/sb-options
+    [HttpGet("sb-options")]
+    public async Task<ActionResult> GetSbOptions()
+    {
+        const string sql = @"
+            SELECT cm_matrix_sb_id   AS id,
+                   cm_matrix_sb_name AS name
+              FROM cm_matrix_sb
+             WHERE cm_matrix_sb_valid = 'Y'
+             ORDER BY cm_matrix_sb_name ASC";
+        try
+        {
+            await using var conn = _factory.Create();
+            await conn.OpenAsync();
+            await using var cmd = new OracleCommand(sql, conn);
+            await using var reader = await cmd.ExecuteReaderAsync();
+            var result = new List<object>();
+            while (await reader.ReadAsync())
+                result.Add(new { id = reader["id"]?.ToString() ?? "", name = reader["name"]?.ToString() ?? "" });
+            return Ok(result);
+        }
+        catch (OracleException ex)
+        {
+            _logger.LogError(ex, "Workshop GetSbOptions failed");
+            return StatusCode(500, new { success = false, message = ex.Message });
+        }
+    }
+
+    // GET api/workshop-summary/div-options
+    [HttpGet("div-options")]
+    public async Task<ActionResult> GetDivOptions()
+    {
+        const string sql = @"
+            SELECT cm_matrix_sb_div_id AS id,
+                   cm_matrix_sb_div_name || ' - ' || cm_matrix_sb_div_bl AS name
+              FROM cm_matrix_sb_div
+             ORDER BY cm_matrix_sb_div_name ASC";
+        try
+        {
+            await using var conn = _factory.Create();
+            await conn.OpenAsync();
+            await using var cmd = new OracleCommand(sql, conn);
+            await using var reader = await cmd.ExecuteReaderAsync();
+            var result = new List<object>();
+            while (await reader.ReadAsync())
+                result.Add(new { id = reader["id"]?.ToString() ?? "", name = reader["name"]?.ToString() ?? "" });
+            return Ok(result);
+        }
+        catch (OracleException ex)
+        {
+            _logger.LogError(ex, "Workshop GetDivOptions failed");
+            return StatusCode(500, new { success = false, message = ex.Message });
+        }
+    }
+
+    // GET api/workshop-summary/comment?id=...&type=N|Y
+    [HttpGet("comment")]
+    public async Task<ActionResult> GetComment([FromQuery] string? id, [FromQuery] string? type)
+    {
+        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(type))
+            return BadRequest(new { success = false, message = "id and type are required" });
+
+        bool isDiv = type.ToUpper() == "Y";
+        string sql = isDiv
+            ? @"SELECT cm_matrix_sb_ws_sb_comment FROM cm_matrix_sb_ws_sum
+                WHERE TO_NUMBER(cm_matrix_sb_ws_sb_div) = TO_NUMBER(:id)
+                  AND cm_matrix_sb_ws_sb_by_div = 'Y' AND ROWNUM = 1"
+            : @"SELECT cm_matrix_sb_ws_sb_comment FROM cm_matrix_sb_ws_sum
+                WHERE TO_NUMBER(cm_matrix_sb_ws_sb_id) = TO_NUMBER(:id)
+                  AND (cm_matrix_sb_ws_sb_by_div IS NULL OR cm_matrix_sb_ws_sb_by_div != 'Y')
+                  AND ROWNUM = 1";
+        try
+        {
+            await using var conn = _factory.Create();
+            await conn.OpenAsync();
+            await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+            cmd.Parameters.Add(new OracleParameter("id", OracleDbType.Varchar2) { Value = id });
+            var result = await cmd.ExecuteScalarAsync();
+            return Ok(new { comment = result == DBNull.Value || result == null ? "" : result.ToString() });
+        }
+        catch (OracleException ex)
+        {
+            _logger.LogError(ex, "Workshop GetComment failed");
+            return StatusCode(500, new { success = false, message = ex.Message });
+        }
+    }
+
+    // POST api/workshop-summary/comment
+    [HttpPost("comment")]
+    public async Task<ActionResult> SaveComment([FromBody] WorkshopCommentRequest req)
+    {
+        if (req == null || string.IsNullOrWhiteSpace(req.Id))
+            return BadRequest(new { success = false, message = "id is required" });
+
+        bool isDiv = (req.Type ?? "").ToUpper() == "Y";
+        string checkSql = isDiv
+            ? @"SELECT COUNT(*) FROM cm_matrix_sb_ws_sum
+                WHERE TO_NUMBER(cm_matrix_sb_ws_sb_div) = TO_NUMBER(:id)
+                  AND cm_matrix_sb_ws_sb_by_div = 'Y'"
+            : @"SELECT COUNT(*) FROM cm_matrix_sb_ws_sum
+                WHERE TO_NUMBER(cm_matrix_sb_ws_sb_id) = TO_NUMBER(:id)
+                  AND (cm_matrix_sb_ws_sb_by_div IS NULL OR cm_matrix_sb_ws_sb_by_div != 'Y')";
+        try
+        {
+            await using var conn = _factory.Create();
+            await conn.OpenAsync();
+
+            await using var checkCmd = new OracleCommand(checkSql, conn) { BindByName = true };
+            checkCmd.Parameters.Add(new OracleParameter("id", OracleDbType.Varchar2) { Value = req.Id });
+            var count = Convert.ToInt32(await checkCmd.ExecuteScalarAsync());
+
+            if (count > 0)
+            {
+                string updateSql = isDiv
+                    ? @"UPDATE cm_matrix_sb_ws_sum
+                           SET cm_matrix_sb_ws_sb_comment = :comment, cm_matrix_sb_ws_last_update = SYSDATE
+                         WHERE TO_NUMBER(cm_matrix_sb_ws_sb_div) = TO_NUMBER(:id)
+                           AND cm_matrix_sb_ws_sb_by_div = 'Y'"
+                    : @"UPDATE cm_matrix_sb_ws_sum
+                           SET cm_matrix_sb_ws_sb_comment = :comment, cm_matrix_sb_ws_last_update = SYSDATE
+                         WHERE TO_NUMBER(cm_matrix_sb_ws_sb_id) = TO_NUMBER(:id)
+                           AND (cm_matrix_sb_ws_sb_by_div IS NULL OR cm_matrix_sb_ws_sb_by_div != 'Y')";
+                await using var upd = new OracleCommand(updateSql, conn) { BindByName = true };
+                upd.Parameters.Add(new OracleParameter("comment", OracleDbType.Varchar2) { Value = req.Comment ?? "" });
+                upd.Parameters.Add(new OracleParameter("id", OracleDbType.Varchar2) { Value = req.Id });
+                await upd.ExecuteNonQueryAsync();
+            }
+            else
+            {
+                const string horizonSql = "SELECT MAX(cm_matrix_sb_approval_horizon_id) FROM cm_matrix_sb_approval";
+                await using var hCmd = new OracleCommand(horizonSql, conn);
+                var hVal = await hCmd.ExecuteScalarAsync();
+                string horizon = hVal == DBNull.Value || hVal == null ? "" : hVal.ToString()!;
+
+                string insertSql = isDiv
+                    ? @"INSERT INTO cm_matrix_sb_ws_sum
+                            (cm_matrix_sb_ws_sb_comment, cm_matrix_sb_ws_sb_horizon,
+                             cm_matrix_sb_ws_sb_div, cm_matrix_sb_ws_sb_by_div, cm_matrix_sb_ws_last_update)
+                        VALUES (:comment, :horizon, TO_NUMBER(:id), 'Y', SYSDATE)"
+                    : @"INSERT INTO cm_matrix_sb_ws_sum
+                            (cm_matrix_sb_ws_sb_id, cm_matrix_sb_ws_sb_comment,
+                             cm_matrix_sb_ws_sb_horizon, cm_matrix_sb_ws_sb_by_div, cm_matrix_sb_ws_last_update)
+                        VALUES (TO_NUMBER(:id), :comment, :horizon, NULL, SYSDATE)";
+                await using var ins = new OracleCommand(insertSql, conn) { BindByName = true };
+                ins.Parameters.Add(new OracleParameter("comment", OracleDbType.Varchar2) { Value = req.Comment ?? "" });
+                ins.Parameters.Add(new OracleParameter("id", OracleDbType.Varchar2) { Value = req.Id });
+                ins.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = horizon });
+                await ins.ExecuteNonQueryAsync();
+            }
+
+            return Ok(new { success = true });
+        }
+        catch (OracleException ex)
+        {
+            _logger.LogError(ex, "Workshop SaveComment failed id={Id} type={Type}", req.Id, req.Type);
+            return StatusCode(500, new { success = false, message = ex.Message });
+        }
+    }
 }
+
+public record WorkshopCommentRequest(string Id, string Type, string? Comment);
