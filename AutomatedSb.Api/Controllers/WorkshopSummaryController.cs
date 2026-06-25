@@ -100,6 +100,7 @@ public class WorkshopSummaryController : ControllerBase
                 hh.cm_matrix_sb_approval_sb_status                AS sb_status,
                 ss.cm_matrix_sb_ws_sb_comment                     AS sb_comment,
                 sss.cm_matrix_sb_ws_sb_comment                    AS div_summary,
+                v.fy                                               AS fy,
                 CAST(SUM(NVL(TO_NUMBER(v.TS_DEMAND DEFAULT NULL ON CONVERSION ERROR), 0)) AS BINARY_DOUBLE) AS ts_demand,
                 CAST(SUM(NVL(TO_NUMBER(v.TS_DEMAND DEFAULT NULL ON CONVERSION ERROR), 0)
                          * NVL(v.rtu_ts, 0) * 3) AS BINARY_DOUBLE) AS rtu_demand,
@@ -135,10 +136,12 @@ public class WorkshopSummaryController : ControllerBase
                 s.cm_matrix_sb_name,
                 hh.cm_matrix_sb_approval_sb_status,
                 ss.cm_matrix_sb_ws_sb_comment,
-                sss.cm_matrix_sb_ws_sb_comment
+                sss.cm_matrix_sb_ws_sb_comment,
+                v.fy
             ORDER BY
                 d.cm_matrix_sb_div_name ASC,
-                s.cm_matrix_sb_name ASC";
+                s.cm_matrix_sb_name ASC,
+                v.fy ASC";
 
         try
         {
@@ -163,6 +166,7 @@ public class WorkshopSummaryController : ControllerBase
                     sbStatus   = reader["sb_status"]?.ToString()   ?? "",
                     comment    = reader["sb_comment"]?.ToString()  ?? "",
                     summary    = reader["div_summary"]?.ToString() ?? "",
+                    fy         = reader["fy"]?.ToString()          ?? "",
                     tsDemand   = Dbl(reader["ts_demand"]),
                     rtuDemand  = Dbl(reader["rtu_demand"]),
                     costDemand = Dbl(reader["cost_demand"]),
