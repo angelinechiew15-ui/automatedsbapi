@@ -327,15 +327,15 @@ public class WorkshopSummaryController : ControllerBase
             {
                 string updateSql = isDiv
                     ? @"UPDATE cm_matrix_sb_ws_sum
-                           SET cm_matrix_sb_ws_sb_comment = :comment, cm_matrix_sb_ws_last_update = SYSDATE
+                           SET cm_matrix_sb_ws_sb_comment = :p_comment, cm_matrix_sb_ws_last_update = SYSDATE
                          WHERE TO_NUMBER(cm_matrix_sb_ws_sb_div) = TO_NUMBER(:id)
                            AND cm_matrix_sb_ws_sb_by_div = 'Y'"
                     : @"UPDATE cm_matrix_sb_ws_sum
-                           SET cm_matrix_sb_ws_sb_comment = :comment, cm_matrix_sb_ws_last_update = SYSDATE
+                           SET cm_matrix_sb_ws_sb_comment = :p_comment, cm_matrix_sb_ws_last_update = SYSDATE
                          WHERE TO_NUMBER(cm_matrix_sb_ws_sb_id) = TO_NUMBER(:id)
                            AND (cm_matrix_sb_ws_sb_by_div IS NULL OR cm_matrix_sb_ws_sb_by_div != 'Y')";
                 await using var upd = new OracleCommand(updateSql, conn) { BindByName = true };
-                upd.Parameters.Add(new OracleParameter("comment", OracleDbType.Varchar2) { Value = req.Comment ?? "" });
+                upd.Parameters.Add(new OracleParameter("p_comment", OracleDbType.Varchar2) { Value = req.Comment ?? "" });
                 upd.Parameters.Add(new OracleParameter("id", OracleDbType.Varchar2) { Value = req.Id });
                 await upd.ExecuteNonQueryAsync();
             }
@@ -350,13 +350,13 @@ public class WorkshopSummaryController : ControllerBase
                     ? @"INSERT INTO cm_matrix_sb_ws_sum
                             (cm_matrix_sb_ws_sb_comment, cm_matrix_sb_ws_sb_horizon,
                              cm_matrix_sb_ws_sb_div, cm_matrix_sb_ws_sb_by_div, cm_matrix_sb_ws_last_update)
-                        VALUES (:comment, :horizon, TO_NUMBER(:id), 'Y', SYSDATE)"
+                        VALUES (:p_comment, :horizon, TO_NUMBER(:id), 'Y', SYSDATE)"
                     : @"INSERT INTO cm_matrix_sb_ws_sum
                             (cm_matrix_sb_ws_sb_id, cm_matrix_sb_ws_sb_comment,
                              cm_matrix_sb_ws_sb_horizon, cm_matrix_sb_ws_sb_by_div, cm_matrix_sb_ws_last_update)
-                        VALUES (TO_NUMBER(:id), :comment, :horizon, NULL, SYSDATE)";
+                        VALUES (TO_NUMBER(:id), :p_comment, :horizon, NULL, SYSDATE)";
                 await using var ins = new OracleCommand(insertSql, conn) { BindByName = true };
-                ins.Parameters.Add(new OracleParameter("comment", OracleDbType.Varchar2) { Value = req.Comment ?? "" });
+                ins.Parameters.Add(new OracleParameter("p_comment", OracleDbType.Varchar2) { Value = req.Comment ?? "" });
                 ins.Parameters.Add(new OracleParameter("id", OracleDbType.Varchar2) { Value = req.Id });
                 ins.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = horizon });
                 await ins.ExecuteNonQueryAsync();
