@@ -32,7 +32,6 @@ public class SbApprovalController : ControllerBase
 
         const string sql = @"
             SELECT
-                :horizon AS horizon,
                 s.cm_matrix_sb_id AS sb_id,
                 s.cm_matrix_sb_name AS sb_name,
                 p.cm_matrix_person_id AS owner_id,
@@ -55,7 +54,10 @@ public class SbApprovalController : ControllerBase
                             ORDER BY a.cm_matrix_sb_approval_id DESC
                         ) AS rn
                     FROM cm_matrix_sb_approval a
-                    WHERE a.cm_matrix_sb_approval_horizon_id = :horizon
+                    WHERE a.cm_matrix_sb_approval_horizon_id = (
+                        SELECT MAX(cm_matrix_sb_approval_horizon_id) 
+                        FROM cm_matrix_sb_approval
+                    )
                 ) z
                 WHERE z.rn = 1
             ) a
@@ -73,7 +75,6 @@ public class SbApprovalController : ControllerBase
             await using var conn = _factory.Create();
             await conn.OpenAsync();
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
-            cmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = horizon });
             cmd.Parameters.Add(new OracleParameter("ownerId", OracleDbType.Varchar2) { Value = string.IsNullOrWhiteSpace(ownerId) ? DBNull.Value : ownerId });
             cmd.Parameters.Add(new OracleParameter("sbId", OracleDbType.Varchar2) { Value = string.IsNullOrWhiteSpace(sbId) ? DBNull.Value : sbId });
             cmd.Parameters.Add(new OracleParameter("status", OracleDbType.Varchar2) { Value = string.IsNullOrWhiteSpace(status) ? DBNull.Value : status });
@@ -84,7 +85,6 @@ public class SbApprovalController : ControllerBase
             {
                 rows.Add(new
                 {
-                    horizon = reader["horizon"]?.ToString() ?? "",
                     sbId = reader["sb_id"]?.ToString() ?? "",
                     sbName = reader["sb_name"]?.ToString() ?? "",
                     ownerId = reader["owner_id"]?.ToString() ?? "",
