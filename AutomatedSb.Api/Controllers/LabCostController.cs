@@ -25,6 +25,48 @@ public class LabCostController : ControllerBase
         _logger = logger;
     }
 
+    // GET api/lab-cost/filter-options
+    // Returns distinct locations and SBs for preloading filter dropdowns.
+    [HttpGet("filter-options")]
+    public async Task<ActionResult> GetFilterOptions()
+    {
+        const string sql = @"
+            SELECT DISTINCT loc AS location,
+                   v.sb,
+                   NVL(s.cm_matrix_sb_name, v.sb) AS sbname
+              FROM v_sb_asb_data v
+              LEFT JOIN cm_matrix_sb s ON s.cm_matrix_sb_name = v.sb
+             WHERE v.loc IS NOT NULL AND v.sb IS NOT NULL
+             ORDER BY loc ASC, v.sb ASC";
+        try
+        {
+            await using var conn = _factory.Create();
+            await conn.OpenAsync();
+            await using var cmd = new OracleCommand(sql, conn);
+            await using var reader = await cmd.ExecuteReaderAsync();
+            var locations = new SortedSet<string>();
+            var sbMap = new SortedDictionary<string, string>(); // sb -> sbname
+            while (await reader.ReadAsync())
+            {
+                var loc    = reader["location"]?.ToString() ?? "";
+                var sb     = reader["sb"]?.ToString()       ?? "";
+                var sbname = reader["sbname"]?.ToString()   ?? sb;
+                if (!string.IsNullOrWhiteSpace(loc))   locations.Add(loc);
+                if (!string.IsNullOrWhiteSpace(sb))    sbMap.TryAdd(sb, sbname);
+            }
+            return Ok(new
+            {
+                locations = locations.ToList(),
+                sbs = sbMap.Select(kv => new { value = kv.Key, text = kv.Value }).ToList(),
+            });
+        }
+        catch (OracleException ex)
+        {
+            _logger.LogError(ex, "LabCost GetFilterOptions failed");
+            return StatusCode(500, new { success = false, message = ex.Message });
+        }
+    }
+
     // GET api/lab-cost/qtr-avg?horizon=26-06
     // Returns one row per (location, sb, fy) with the quarterly average cost value.
     [HttpGet("qtr-avg")]
