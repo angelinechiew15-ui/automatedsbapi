@@ -1,6 +1,7 @@
 using AutomatedSb.Api.Data;
 using Microsoft.AspNetCore.Mvc;
 using Oracle.ManagedDataAccess.Client;
+using System.ComponentModel.DataAnnotations;
 
 namespace AutomatedSb.Api.Controllers;
 
@@ -8,6 +9,14 @@ namespace AutomatedSb.Api.Controllers;
 [Route("api/sb-approval")]
 public class SbApprovalController : ControllerBase
 {
+    public sealed class ConditionalReleaseRequest
+    {
+        [Required]
+        public int? ApprovalId { get; set; }
+
+        public string? Remark { get; set; }
+    }
+
     private readonly IOracleConnectionFactory _factory;
     private readonly ILogger<SbApprovalController> _logger;
 
@@ -32,6 +41,7 @@ public class SbApprovalController : ControllerBase
 
         const string sql = @"
             SELECT
+                i.cm_matrix_sb_approval_id                         AS approval_id,
                 :horizonDisplay                                    AS horizon,
                 gg.cm_matrix_sb_name                               AS sb_name,
                 i.cm_matrix_sb_approval_last_update                AS publish_date,
@@ -82,6 +92,7 @@ public class SbApprovalController : ControllerBase
             {
                 rows.Add(new
                 {
+                    approvalId         = reader["approval_id"] is DBNull ? 0 : Convert.ToInt32(reader["approval_id"]),
                     horizon            = reader["horizon"]?.ToString()            ?? "N/A",
                     sbName             = reader["sb_name"]?.ToString()             ?? "",
                     publishDate        = reader["publish_date"] is DBNull ? null : ((DateTime)reader["publish_date"]).ToString("yyyy-MM-dd"),
@@ -101,6 +112,54 @@ public class SbApprovalController : ControllerBase
         catch (OracleException ex)
         {
             _logger.LogError(ex, "SbApproval overview failed for horizon={Horizon}", horizon);
+            return StatusCode(500, new { success = false, message = ex.Message });
+        }
+    }
+
+    // POST api/sb-approval/conditional-release
+    [HttpPost("conditional-release")]
+    public async Task<ActionResult> UpdateConditionalRelease([FromBody] ConditionalReleaseRequest request)
+    {
+        if (!ModelState.IsValid || request.ApprovalId is null || request.ApprovalId <= 0)
+        {
+            return BadRequest(new { success = false, message = "approvalId is required" });
+        }
+
+        const string sql = @"
+            UPDATE cm_matrix_sb_approval
+               SET cm_matrix_sb_approval_cr_remark = :remark
+             WHERE cm_matrix_sb_approval_id = :approvalId
+               AND LOWER(NVL(cm_matrix_sb_approval_sb_status, '')) = 'onhold'";
+
+        try
+        {
+            await using var conn = _factory.Create();
+            await conn.OpenAsync();
+            await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+            cmd.Parameters.Add(new OracleParameter("remark", OracleDbType.Varchar2)
+            {
+                Value = string.IsNullOrWhiteSpace(request.Remark) ? DBNull.Value : request.Remark!.Trim(),
+            });
+            cmd.Parameters.Add(new OracleParameter("approvalId", OracleDbType.Int32)
+            {
+                Value = request.ApprovalId.Value,
+            });
+
+            var updated = await cmd.ExecuteNonQueryAsync();
+            if (updated <= 0)
+            {
+                return NotFound(new
+                {
+                    success = false,
+                    message = "No onhold record found for the selected approval row",
+                });
+            }
+
+            return Ok(new { success = true, approvalId = request.ApprovalId.Value });
+        }
+        catch (OracleException ex)
+        {
+            _logger.LogError(ex, "Conditional release update failed for approvalId={ApprovalId}", request.ApprovalId);
             return StatusCode(500, new { success = false, message = ex.Message });
         }
     }
