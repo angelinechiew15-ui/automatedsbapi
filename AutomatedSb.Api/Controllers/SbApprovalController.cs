@@ -1,6 +1,7 @@
 using AutomatedSb.Api.Data;
 using Microsoft.AspNetCore.Mvc;
 using Oracle.ManagedDataAccess.Client;
+using System.Data.OleDb;
 
 namespace AutomatedSb.Api.Controllers;
 
@@ -10,13 +11,42 @@ public class SbApprovalController : ControllerBase
 {
     private readonly IOracleConnectionFactory _factory;
     private readonly ILogger<SbApprovalController> _logger;
+    private readonly IConfiguration _configuration;
 
     public SbApprovalController(
         IOracleConnectionFactory factory,
-        ILogger<SbApprovalController> logger)
+        ILogger<SbApprovalController> logger,
+        IConfiguration configuration)
     {
         _factory = factory;
         _logger = logger;
+        _configuration = configuration;
+    }
+
+    private int GetHorizonId(string horizon)
+    {
+        int horizonId = 0;
+        var connString = _configuration.GetConnectionString("MyDatabaseREL");
+        using (OleDbConnection con = new OleDbConnection(connString))
+        {
+            con.Open();
+            string qry = "SELECT yy.rhz_id FROM rfc_horizon yy WHERE yy.rhz_name = @horizonName";
+            using (OleDbCommand cmd = new OleDbCommand(qry, con))
+            {
+                cmd.Parameters.AddWithValue("@horizonName", horizon);
+                using (OleDbDataReader rdr = cmd.ExecuteReader())
+                {
+                    while (rdr.Read())
+                    {
+                        int ordinal = rdr.GetOrdinal("rhz_id");
+                        if (!rdr.IsDBNull(ordinal))
+                            horizonId = Convert.ToInt32(rdr.GetDecimal(ordinal));
+                    }
+                }
+            }
+            con.Close();
+        }
+        return horizonId;
     }
 
     // GET api/sb-approval/overview?horizon=26-06&ownerId=...&sbId=...&status=...
@@ -32,7 +62,7 @@ public class SbApprovalController : ControllerBase
 
         const string sql = @"
             SELECT
-                :horizon                                           AS horizon,
+                :horizonDisplay                                    AS horizon,
                 gg.cm_matrix_sb_name                               AS sb_name,
                 i.cm_matrix_sb_approval_last_update                AS publish_date,
                 i.cm_matrix_sb_approval_customer_group             AS customer_group,
@@ -48,7 +78,7 @@ public class SbApprovalController : ControllerBase
               ON gg.cm_matrix_sb_id = i.cm_matrix_sb_approval_sb_id
             JOIN cm_matrix_person_to_sb k
               ON k.cm_matrix_person_to_sb_sb_id = gg.cm_matrix_sb_id
-            WHERE (:horizon IS NULL OR i.cm_matrix_sb_approval_horizon_id = :horizon)
+            WHERE (:horizonId IS NULL OR i.cm_matrix_sb_approval_horizon_id = :horizonId)
               AND (:ownerId IS NULL OR k.cm_matrix_person_to_sb_person_id = :ownerId)
               AND (:sbId   IS NULL OR gg.cm_matrix_sb_id = :sbId)
               AND (:status IS NULL OR i.cm_matrix_sb_approval_status = :status)
@@ -59,11 +89,20 @@ public class SbApprovalController : ControllerBase
 
         try
         {
+            // Look up horizon ID from horizon string
+            int horizonId = 0;
+            if (!string.IsNullOrWhiteSpace(horizon))
+            {
+                horizonId = GetHorizonId(horizon);
+            }
+
             await using var conn = _factory.Create();
             await conn.OpenAsync();
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
-            cmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2)
-                { Value = horizon });
+            cmd.Parameters.Add(new OracleParameter("horizonDisplay", OracleDbType.Varchar2)
+                { Value = horizon ?? "" });
+            cmd.Parameters.Add(new OracleParameter("horizonId", OracleDbType.Int32)
+                { Value = horizonId > 0 ? (object)horizonId : DBNull.Value });
             cmd.Parameters.Add(new OracleParameter("ownerId", OracleDbType.Varchar2)
                 { Value = string.IsNullOrWhiteSpace(ownerId) ? DBNull.Value : (object)ownerId });
             cmd.Parameters.Add(new OracleParameter("sbId", OracleDbType.Varchar2)
