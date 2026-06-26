@@ -1,7 +1,6 @@
 using AutomatedSb.Api.Data;
 using Microsoft.AspNetCore.Mvc;
 using Oracle.ManagedDataAccess.Client;
-using System.Data.OleDb;
 
 namespace AutomatedSb.Api.Controllers;
 
@@ -11,40 +10,43 @@ public class SbApprovalController : ControllerBase
 {
     private readonly IOracleConnectionFactory _factory;
     private readonly ILogger<SbApprovalController> _logger;
-    private readonly IConfiguration _configuration;
 
     public SbApprovalController(
         IOracleConnectionFactory factory,
-        ILogger<SbApprovalController> logger,
-        IConfiguration configuration)
+        ILogger<SbApprovalController> logger)
     {
         _factory = factory;
         _logger = logger;
-        _configuration = configuration;
     }
 
-    private int GetHorizonId(string horizon)
+    private async Task<int> GetHorizonId(string horizon)
     {
         int horizonId = 0;
-        var connString = _configuration.GetConnectionString("MyDatabaseREL");
-        using (OleDbConnection con = new OleDbConnection(connString))
+        try
         {
-            con.Open();
-            string qry = "SELECT yy.rhz_id FROM rfc_horizon yy WHERE yy.rhz_name = @horizonName";
-            using (OleDbCommand cmd = new OleDbCommand(qry, con))
+            await using var conn = _factory.Create();
+            await conn.OpenAsync();
+            
+            // Try to lookup horizon ID from Oracle database
+            const string horizonLookupSql = @"
+                SELECT yy.rhz_id 
+                FROM rfc_horizon yy 
+                WHERE yy.rhz_name = :horizonName";
+
+            await using var cmd = new OracleCommand(horizonLookupSql, conn) { BindByName = true };
+            cmd.Parameters.Add(new OracleParameter("horizonName", OracleDbType.Varchar2)
+                { Value = horizon });
+
+            var result = await cmd.ExecuteScalarAsync();
+            if (result != null && int.TryParse(result.ToString(), out int id))
             {
-                cmd.Parameters.AddWithValue("@horizonName", horizon);
-                using (OleDbDataReader rdr = cmd.ExecuteReader())
-                {
-                    while (rdr.Read())
-                    {
-                        int ordinal = rdr.GetOrdinal("rhz_id");
-                        if (!rdr.IsDBNull(ordinal))
-                            horizonId = Convert.ToInt32(rdr.GetDecimal(ordinal));
-                    }
-                }
+                horizonId = id;
             }
-            con.Close();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to lookup horizon ID for {Horizon}", horizon);
+            // Continue without horizon ID - the query will use the string value instead
         }
         return horizonId;
     }
@@ -89,11 +91,11 @@ public class SbApprovalController : ControllerBase
 
         try
         {
-            // Look up horizon ID from horizon string
+            // Look up horizon ID from Oracle database
             int horizonId = 0;
             if (!string.IsNullOrWhiteSpace(horizon))
             {
-                horizonId = GetHorizonId(horizon);
+                horizonId = await GetHorizonId(horizon);
             }
 
             await using var conn = _factory.Create();
