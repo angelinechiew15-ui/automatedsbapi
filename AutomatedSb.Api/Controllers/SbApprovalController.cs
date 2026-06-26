@@ -19,38 +19,6 @@ public class SbApprovalController : ControllerBase
         _logger = logger;
     }
 
-    private async Task<int> GetHorizonId(string horizon)
-    {
-        int horizonId = 0;
-        try
-        {
-            await using var conn = _factory.Create();
-            await conn.OpenAsync();
-            
-            // Try to lookup horizon ID from Oracle database
-            const string horizonLookupSql = @"
-                SELECT yy.rhz_id 
-                FROM rfc_horizon yy 
-                WHERE yy.rhz_name = :horizonName";
-
-            await using var cmd = new OracleCommand(horizonLookupSql, conn) { BindByName = true };
-            cmd.Parameters.Add(new OracleParameter("horizonName", OracleDbType.Varchar2)
-                { Value = horizon });
-
-            var result = await cmd.ExecuteScalarAsync();
-            if (result != null && int.TryParse(result.ToString(), out int id))
-            {
-                horizonId = id;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to lookup horizon ID for {Horizon}", horizon);
-            // Continue without horizon ID - the query will use the string value instead
-        }
-        return horizonId;
-    }
-
     // GET api/sb-approval/overview?horizon=26-06&ownerId=...&sbId=...&status=...
     [HttpGet("overview")]
     public async Task<ActionResult> GetOverview(
@@ -64,7 +32,7 @@ public class SbApprovalController : ControllerBase
 
         const string sql = @"
             SELECT
-                :horizonDisplay                                    AS horizon,
+                :horizon                                           AS horizon,
                 gg.cm_matrix_sb_name                               AS sb_name,
                 i.cm_matrix_sb_approval_last_update                AS publish_date,
                 i.cm_matrix_sb_approval_customer_group             AS customer_group,
@@ -80,8 +48,7 @@ public class SbApprovalController : ControllerBase
               ON gg.cm_matrix_sb_id = i.cm_matrix_sb_approval_sb_id
             JOIN cm_matrix_person_to_sb k
               ON k.cm_matrix_person_to_sb_sb_id = gg.cm_matrix_sb_id
-            WHERE (:horizonId IS NULL OR i.cm_matrix_sb_approval_horizon_id = :horizonId)
-              AND (:ownerId IS NULL OR k.cm_matrix_person_to_sb_person_id = :ownerId)
+            WHERE (:ownerId IS NULL OR k.cm_matrix_person_to_sb_person_id = :ownerId)
               AND (:sbId   IS NULL OR gg.cm_matrix_sb_id = :sbId)
               AND (:status IS NULL OR i.cm_matrix_sb_approval_status = :status)
             ORDER BY i.cm_matrix_sb_approval_sb_id,
@@ -91,20 +58,11 @@ public class SbApprovalController : ControllerBase
 
         try
         {
-            // Look up horizon ID from Oracle database
-            int horizonId = 0;
-            if (!string.IsNullOrWhiteSpace(horizon))
-            {
-                horizonId = await GetHorizonId(horizon);
-            }
-
             await using var conn = _factory.Create();
             await conn.OpenAsync();
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
-            cmd.Parameters.Add(new OracleParameter("horizonDisplay", OracleDbType.Varchar2)
-                { Value = horizon ?? "" });
-            cmd.Parameters.Add(new OracleParameter("horizonId", OracleDbType.Int32)
-                { Value = horizonId > 0 ? (object)horizonId : DBNull.Value });
+            cmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2)
+                { Value = horizon });
             cmd.Parameters.Add(new OracleParameter("ownerId", OracleDbType.Varchar2)
                 { Value = string.IsNullOrWhiteSpace(ownerId) ? DBNull.Value : (object)ownerId });
             cmd.Parameters.Add(new OracleParameter("sbId", OracleDbType.Varchar2)
