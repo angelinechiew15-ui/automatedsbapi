@@ -9,41 +9,53 @@ namespace AutomatedSb.Api.Controllers;
 public class RefsController : ControllerBase
 {
     private readonly IOracleConnectionFactory _factory;
+    private readonly IOracleRealisConnectionFactory _realisFactory;
     private readonly ILogger<RefsController> _logger;
 
     public RefsController(
         IOracleConnectionFactory factory,
+        IOracleRealisConnectionFactory realisFactory,
         ILogger<RefsController> logger)
     {
         _factory = factory;
+        _realisFactory = realisFactory;
         _logger = logger;
     }
 
-    // GET api/refs/horizons - Generate horizon list (current year + previous year quarters)
+    // GET api/refs/horizons - Get horizon list from rfc_horizon table
     [HttpGet("horizons")]
-    public ActionResult GetHorizons()
+    public async Task<ActionResult> GetHorizons()
     {
-        var horizons = new List<object>();
-        string currentYear = DateTime.Now.Year.ToString();
-        string curyr = currentYear.Substring(currentYear.Length - 2);
-        string prevyr = (int.Parse(curyr) - 1).ToString("D2");
-        string[] months = { "03", "06", "09", "12" };
+        const string sql = @"
+            SELECT rhz_id AS value,
+                   rhz_name AS text
+            FROM rfc_horizon
+            ORDER BY rhz_id DESC";
 
-        // Add current year items
-        foreach (string month in months)
+        try
         {
-            string value = $"{curyr}-{month}";
-            horizons.Add(new { value, text = value });
-        }
+            await using var conn = _realisFactory.Create();
+            await conn.OpenAsync();
+            await using var cmd = new OracleCommand(sql, conn);
+            await using var reader = await cmd.ExecuteReaderAsync();
 
-        // Add previous year items
-        foreach (string month in months)
+            var result = new List<object>();
+            while (await reader.ReadAsync())
+            {
+                result.Add(new
+                {
+                    value = reader["value"]?.ToString() ?? "",
+                    text = reader["text"]?.ToString() ?? ""
+                });
+            }
+
+            return Ok(result);
+        }
+        catch (OracleException ex)
         {
-            string value = $"{prevyr}-{month}";
-            horizons.Add(new { value, text = value });
+            _logger.LogError(ex, "GetHorizons failed");
+            return StatusCode(500, new { success = false, message = ex.Message });
         }
-
-        return Ok(horizons);
     }
 
     // GET api/refs/sbOwners - Get list of SB owners (persons)
