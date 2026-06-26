@@ -32,7 +32,7 @@ public class SbApprovalController : ControllerBase
 
         const string sql = @"
             SELECT
-                h.cm_matrix_sb_approval_horizon                    AS horizon,
+                :horizon                                           AS horizon,
                 gg.cm_matrix_sb_name                               AS sb_name,
                 i.cm_matrix_sb_approval_last_update                AS publish_date,
                 i.cm_matrix_sb_approval_customer_group             AS customer_group,
@@ -48,10 +48,7 @@ public class SbApprovalController : ControllerBase
               ON gg.cm_matrix_sb_id = i.cm_matrix_sb_approval_sb_id
             JOIN cm_matrix_person_to_sb k
               ON k.cm_matrix_person_to_sb_sb_id = gg.cm_matrix_sb_id
-            JOIN cm_matrix_sb_approval_horizon h
-              ON h.cm_matrix_sb_approval_horizon_id = i.cm_matrix_sb_approval_horizon_id
-            WHERE h.cm_matrix_sb_approval_horizon = :horizon
-              AND (:ownerId IS NULL OR k.cm_matrix_person_to_sb_person_id = :ownerId)
+            WHERE (:ownerId IS NULL OR k.cm_matrix_person_to_sb_person_id = :ownerId)
               AND (:sbId   IS NULL OR gg.cm_matrix_sb_id = :sbId)
               AND (:status IS NULL OR i.cm_matrix_sb_approval_status = :status)
             ORDER BY i.cm_matrix_sb_approval_sb_id,
