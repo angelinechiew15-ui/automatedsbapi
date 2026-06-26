@@ -48,7 +48,8 @@ public class SbApprovalController : ControllerBase
               ON gg.cm_matrix_sb_id = i.cm_matrix_sb_approval_sb_id
             JOIN cm_matrix_person_to_sb k
               ON k.cm_matrix_person_to_sb_sb_id = gg.cm_matrix_sb_id
-            WHERE (:ownerId IS NULL OR k.cm_matrix_person_to_sb_person_id = :ownerId)
+            WHERE (:horizon IS NULL OR i.cm_matrix_sb_approval_horizon_id = :horizon)
+              AND (:ownerId IS NULL OR k.cm_matrix_person_to_sb_person_id = :ownerId)
               AND (:sbId   IS NULL OR gg.cm_matrix_sb_id = :sbId)
               AND (:status IS NULL OR i.cm_matrix_sb_approval_status = :status)
             ORDER BY i.cm_matrix_sb_approval_sb_id,
