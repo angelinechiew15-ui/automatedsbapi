@@ -18,6 +18,9 @@ public class ServiceBundleController : ControllerBase
     // CLOC ids that are placeholders, not real labs (mirrors the legacy app).
     private static readonly decimal[] ExcludedClocs = { 9900m, 9901m };
 
+    private static string NumExpr(string expr) =>
+        $"TO_NUMBER({expr} DEFAULT 0 ON CONVERSION ERROR)";
+
     public ServiceBundleController(
         IOracleConnectionFactory factory,
         IOracleRealisConnectionFactory realisFactory,
@@ -57,7 +60,7 @@ public class ServiceBundleController : ControllerBase
         try
         {
             await using var conn = _factory.Create();
-            await conn.OpenAsync();
+            await conn.OpenWithNlsAsync();
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
             if (!all)
             {
@@ -105,7 +108,7 @@ public class ServiceBundleController : ControllerBase
 
             await using (var conn = _factory.Create())
             {
-                await conn.OpenAsync();
+                await conn.OpenWithNlsAsync();
 
                 // SB name
                 await using (var cmd = new OracleCommand(
@@ -216,7 +219,7 @@ public class ServiceBundleController : ControllerBase
                       ORDER BY g.cloc_location_name ASC";
 
         await using var conn = _realisFactory.Create();
-        await conn.OpenAsync();
+        await conn.OpenWithNlsAsync();
         await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
         for (var i = 0; i < clocIds.Count; i++)
         {
@@ -256,7 +259,7 @@ public class ServiceBundleController : ControllerBase
         var locSums = new List<(string Loc, double Tsa, double Rtua, double Costa)>();
         await using (var conn = _factory.Create())
         {
-            await conn.OpenAsync();
+            await conn.OpenWithNlsAsync();
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
             cmd.Parameters.Add(new OracleParameter("sbName", sbName));
             cmd.Parameters.Add(new OracleParameter("horizon", horizon ?? (object)DBNull.Value));
@@ -386,7 +389,7 @@ public class ServiceBundleController : ControllerBase
     private async Task<string> GetSbNameAsync(string sbId)
     {
         await using var conn = _factory.Create();
-        await conn.OpenAsync();
+        await conn.OpenWithNlsAsync();
         await using var cmd = new OracleCommand(
             "SELECT cm_matrix_sb_name FROM cm_matrix_sb WHERE cm_matrix_sb_id = :sbId", conn)
             { BindByName = true };
@@ -483,10 +486,10 @@ public class ServiceBundleController : ControllerBase
                     FROM (
                       SELECT {labelExpr} AS label,
                              CASE WHEN t.quarter IS NULL THEN 0 ELSE 1 END AS isq,
-                             ((SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR))
-                                 + SUM(NVL(TO_NUMBER(ats.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
-                               * SUM(TO_NUMBER(t.""RTU/TS"" DEFAULT 0 ON CONVERSION ERROR)) * 3)
-                               * SUM(TO_NUMBER(t.""COST/RTU"" DEFAULT 0 ON CONVERSION ERROR)) / 1000 AS rfc_wo,
+                                                         ((SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR))
+                                                                 + SUM(NVL(TO_NUMBER(ats.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
+                                                             * SUM({NumExpr(@"t.""RTU/TS""")}) * 3)
+                                                             * SUM({NumExpr(@"t.""COST/RTU""")}) / 1000 AS rfc_wo,
                              SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS depr,
                              SUM(NVL(TO_NUMBER(ac.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)) AS addc
                         FROM rpt.asb_ts_actual t{AdderJoin("ats", "Adder", "TS")}{AdderJoin("ac", "Adder", "COST")}
@@ -500,7 +503,7 @@ public class ServiceBundleController : ControllerBase
     {
         var rows = new List<CostDemandRow>();
         await using var conn = _factory.Create();
-        await conn.OpenAsync();
+        await conn.OpenWithNlsAsync();
         await using var cmd = new OracleCommand(CostDemandComponentsSql(loc), conn) { BindByName = true };
         cmd.Parameters.Add(new OracleParameter("sbName", sbName));
         cmd.Parameters.Add(new OracleParameter("horizon", horizon ?? (object)DBNull.Value));
@@ -582,14 +585,14 @@ public class ServiceBundleController : ControllerBase
         var sql = $@"SELECT {labelExpr} AS label,
                             SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR)) AS ts_demand,
                             SUM(TO_NUMBER(t.ts_actual DEFAULT 0 ON CONVERSION ERROR)) AS ts_actual,
-                            ((SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR))
-                                + SUM(NVL(TO_NUMBER(ats.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
-                              * CAST(SUM(TO_NUMBER(t.""RTU/TS"" DEFAULT 0 ON CONVERSION ERROR)) AS BINARY_DOUBLE) * 3) AS rtu_plan,
+                                                        ((SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR))
+                                                                + SUM(NVL(TO_NUMBER(ats.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
+                                                            * CAST(SUM({NumExpr(@"t.""RTU/TS""")}) AS BINARY_DOUBLE) * 3) AS rtu_plan,
                             SUM(TO_NUMBER(t.rtu_act   DEFAULT 0 ON CONVERSION ERROR)) AS rtu_act,
                             SUM(TO_NUMBER(t.cost_act  DEFAULT 0 ON CONVERSION ERROR)) AS cost_act,
                             SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS depr,
-                            SUM(TO_NUMBER(t.""RTU/TS""  DEFAULT 0 ON CONVERSION ERROR)) AS rtu_ts,
-                            SUM(TO_NUMBER(t.""COST/RTU"" DEFAULT 0 ON CONVERSION ERROR)) AS cost_rtu
+                            SUM({NumExpr(@"t.""RTU/TS""")}) AS rtu_ts,
+                            SUM({NumExpr(@"t.""COST/RTU""")}) AS cost_rtu
                        FROM rpt.asb_ts_actual t{AdderJoin("ats", "Adder", "TS")}
                       WHERE t.sb = :sbName AND t.horizon = :horizon AND (t.loc = :loc OR t.loc LIKE :loc || ' %')
                       GROUP BY {labelExpr}
@@ -597,7 +600,7 @@ public class ServiceBundleController : ControllerBase
 
         var rows = new List<BaseRow>();
         await using var conn = _factory.Create();
-        await conn.OpenAsync();
+        await conn.OpenWithNlsAsync();
         await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
         cmd.Parameters.Add(new OracleParameter("sbName", sbName));
         cmd.Parameters.Add(new OracleParameter("horizon", horizon ?? (object)DBNull.Value));
@@ -639,7 +642,7 @@ public class ServiceBundleController : ControllerBase
 
         var map = new Dictionary<string, AdderRow>(StringComparer.OrdinalIgnoreCase);
         await using var conn = _factory.Create();
-        await conn.OpenAsync();
+        await conn.OpenWithNlsAsync();
         await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
         cmd.Parameters.Add(new OracleParameter("sbName", sbName));
         cmd.Parameters.Add(new OracleParameter("horizon", horizon ?? (object)DBNull.Value));
@@ -711,7 +714,7 @@ public class ServiceBundleController : ControllerBase
         var totals = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         await using (var conn = _factory.Create())
         {
-            await conn.OpenAsync();
+            await conn.OpenWithNlsAsync();
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
             cmd.Parameters.Add(new OracleParameter("sbName", sbName));
             cmd.Parameters.Add(new OracleParameter("horizon", horizon ?? (object)DBNull.Value));
@@ -743,7 +746,7 @@ public class ServiceBundleController : ControllerBase
     {
         var pairs = new List<(string, decimal)>();
         await using var conn = _factory.Create();
-        await conn.OpenAsync();
+        await conn.OpenWithNlsAsync();
         await using var cmd = new OracleCommand(
             @"SELECT DISTINCT c.cm_matrix_client_corridor        AS cc,
                               c.cm_matrix_client_lab_realis_cloc AS loc
@@ -782,7 +785,7 @@ public class ServiceBundleController : ControllerBase
                       WHERE g.cloc_id IN ({string.Join(", ", binds)})";
 
         await using var conn = _realisFactory.Create();
-        await conn.OpenAsync();
+        await conn.OpenWithNlsAsync();
         await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
         for (var i = 0; i < clocIds.Count; i++)
         {
@@ -811,7 +814,7 @@ public class ServiceBundleController : ControllerBase
         var points = new List<object>();
 
         await using var conn = factory();
-        await conn.OpenAsync();
+        await conn.OpenWithNlsAsync();
         await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
 
         if (sql.Contains(":sbName", StringComparison.OrdinalIgnoreCase))

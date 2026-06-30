@@ -19,6 +19,9 @@ public class WorkshopSummaryController : ControllerBase
         _logger = logger;
     }
 
+    private static string NumExpr(string expr) =>
+        $"TO_NUMBER({expr} DEFAULT 0 ON CONVERSION ERROR)";
+
     // GET api/workshop-summary
     [HttpGet]
     public async Task<ActionResult> GetAll()
@@ -33,7 +36,7 @@ public class WorkshopSummaryController : ControllerBase
         try
         {
             await using var conn = _factory.Create();
-            await conn.OpenAsync();
+            await conn.OpenWithNlsAsync();
             await using var cmd = new OracleCommand(sql, conn);
             await using var reader = await cmd.ExecuteReaderAsync();
 
@@ -92,7 +95,7 @@ public class WorkshopSummaryController : ControllerBase
 
         // Main query: approval status + comments from cm_matrix_sb_ws_sum
         // Then aggregate demand values from v_sb_asb_data for the same horizon.
-        const string sql = @"
+        var sql = $@"
             SELECT
                 d.cm_matrix_sb_div_name                           AS div_name,
                 d.cm_matrix_sb_div_bl                             AS sub_div,
@@ -100,14 +103,10 @@ public class WorkshopSummaryController : ControllerBase
                 hh.cm_matrix_sb_approval_sb_status                AS sb_status,
                 ss.cm_matrix_sb_ws_sb_comment                     AS sb_comment,
                 sss.cm_matrix_sb_ws_sb_comment                    AS div_summary,
-                v.fy                                               AS fy,
-                CAST(SUM(NVL(TO_NUMBER(v.TS_DEMAND DEFAULT NULL ON CONVERSION ERROR), 0)) AS BINARY_DOUBLE) AS ts_demand,
-                CAST(SUM(NVL(TO_NUMBER(v.TS_DEMAND DEFAULT NULL ON CONVERSION ERROR), 0)
-                         * NVL(v.rtu_ts, 0) * 3) AS BINARY_DOUBLE) AS rtu_demand,
-                CAST(SUM(NVL(TO_NUMBER(v.TS_DEMAND DEFAULT NULL ON CONVERSION ERROR), 0)
-                         * NVL(v.rtu_ts, 0) * 3
-                         * NVL(TO_NUMBER(v.""COST/RTU"" DEFAULT NULL ON CONVERSION ERROR), 0) / 1000
-                         + NVL(TO_NUMBER(v.DEPRECIATION DEFAULT NULL ON CONVERSION ERROR), 0)) AS BINARY_DOUBLE) AS cost_demand
+                m.fy                                               AS fy,
+                m.ts_demand                                        AS ts_demand,
+                m.rtu_demand                                       AS rtu_demand,
+                m.cost_demand                                      AS cost_demand
             FROM
                 cm_matrix_sb s
                 INNER JOIN cm_matrix_sb_div d
@@ -125,9 +124,46 @@ public class WorkshopSummaryController : ControllerBase
                 LEFT JOIN cm_matrix_sb_ws_sum sss
                     ON sss.cm_matrix_sb_ws_sb_div = d.cm_matrix_sb_div_id
                    AND sss.cm_matrix_sb_ws_sb_by_div = 'Y'
-                LEFT JOIN v_sb_asb_data v
-                    ON v.sb = s.cm_matrix_sb_name
-                   AND v.horizon = :horizon
+                LEFT JOIN (
+                    SELECT
+                        t.sb,
+                        t.fy,
+                        CAST(SUM({NumExpr("t.ts_demand")}) AS BINARY_DOUBLE) AS ts_demand,
+                        CAST(SUM((( {NumExpr("t.ts_demand")} + NVL({NumExpr("a_ts.cm_matrix_adder_value")}, 0))
+                                  * 3 * {NumExpr(@"t.""RTU/TS""")})
+                                 + NVL({NumExpr("a_rtu.cm_matrix_adder_value")}, 0)) AS BINARY_DOUBLE) AS rtu_demand,
+                        CAST(SUM((((( {NumExpr("t.ts_demand")} + NVL({NumExpr("a_ts.cm_matrix_adder_value")}, 0))
+                                   * 3 * {NumExpr(@"t.""RTU/TS""")})
+                                  + NVL({NumExpr("a_rtu.cm_matrix_adder_value")}, 0))
+                                 * {NumExpr(@"t.""COST/RTU""")} / 1000)
+                                 + {NumExpr("t.depreciation")}
+                                 + NVL({NumExpr("a_cost.cm_matrix_adder_value")}, 0)) AS BINARY_DOUBLE) AS cost_demand
+                    FROM rpt.asb_ts_actual t
+                    LEFT JOIN rpt.cm_matrix_sb_adder a_ts
+                      ON t.loc = a_ts.cm_matrix_adder_location
+                     AND t.sb  = a_ts.cm_matrix_adder_sb_name
+                     AND t.fy || '-' || t.quarter = a_ts.cm_matrix_adder_fy || '-' || a_ts.cm_matrix_adder_quarter
+                     AND t.horizon = a_ts.cm_matrix_adder_horizon
+                     AND a_ts.cm_matrix_adder_type = 'Adder'
+                     AND a_ts.cm_matrix_adder_for  = 'TS'
+                    LEFT JOIN rpt.cm_matrix_sb_adder a_rtu
+                      ON t.loc = a_rtu.cm_matrix_adder_location
+                     AND t.sb  = a_rtu.cm_matrix_adder_sb_name
+                     AND t.fy || '-' || t.quarter = a_rtu.cm_matrix_adder_fy || '-' || a_rtu.cm_matrix_adder_quarter
+                     AND t.horizon = a_rtu.cm_matrix_adder_horizon
+                     AND a_rtu.cm_matrix_adder_type = 'Adder'
+                     AND a_rtu.cm_matrix_adder_for  = 'RTU'
+                    LEFT JOIN rpt.cm_matrix_sb_adder a_cost
+                      ON t.loc = a_cost.cm_matrix_adder_location
+                     AND t.sb  = a_cost.cm_matrix_adder_sb_name
+                     AND t.fy || '-' || t.quarter = a_cost.cm_matrix_adder_fy || '-' || a_cost.cm_matrix_adder_quarter
+                     AND t.horizon = a_cost.cm_matrix_adder_horizon
+                     AND a_cost.cm_matrix_adder_type = 'Adder'
+                     AND a_cost.cm_matrix_adder_for  = 'COST'
+                    WHERE t.horizon = :horizon
+                    GROUP BY t.sb, t.fy
+                ) m
+                    ON m.sb = s.cm_matrix_sb_name
             WHERE
                 s.cm_matrix_sb_valid = 'Y'
             GROUP BY
@@ -137,16 +173,19 @@ public class WorkshopSummaryController : ControllerBase
                 hh.cm_matrix_sb_approval_sb_status,
                 ss.cm_matrix_sb_ws_sb_comment,
                 sss.cm_matrix_sb_ws_sb_comment,
-                v.fy
+                m.fy,
+                m.ts_demand,
+                m.rtu_demand,
+                m.cost_demand
             ORDER BY
                 d.cm_matrix_sb_div_name ASC,
                 s.cm_matrix_sb_name ASC,
-                v.fy ASC";
+                m.fy ASC";
 
         try
         {
             await using var conn = _factory.Create();
-            await conn.OpenAsync();
+            await conn.OpenWithNlsAsync();
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
             cmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = horizon });
 
@@ -197,7 +236,7 @@ public class WorkshopSummaryController : ControllerBase
         try
         {
             await using var conn = _factory.Create();
-            await conn.OpenAsync();
+            await conn.OpenWithNlsAsync();
             await using var cmd = new OracleCommand(sql, conn);
             await using var reader = await cmd.ExecuteReaderAsync();
             var result = new List<object>();
@@ -225,7 +264,7 @@ public class WorkshopSummaryController : ControllerBase
         try
         {
             await using var conn = _factory.Create();
-            await conn.OpenAsync();
+            await conn.OpenWithNlsAsync();
             await using var cmd = new OracleCommand(sql, conn);
             await using var reader = await cmd.ExecuteReaderAsync();
             var result = new List<object>();
@@ -252,7 +291,7 @@ public class WorkshopSummaryController : ControllerBase
         try
         {
             await using var conn = _factory.Create();
-            await conn.OpenAsync();
+            await conn.OpenWithNlsAsync();
             await using var cmd = new OracleCommand(sql, conn);
             await using var reader = await cmd.ExecuteReaderAsync();
             var result = new List<object>();
@@ -286,7 +325,7 @@ public class WorkshopSummaryController : ControllerBase
         try
         {
             await using var conn = _factory.Create();
-            await conn.OpenAsync();
+            await conn.OpenWithNlsAsync();
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
             cmd.Parameters.Add(new OracleParameter("id", OracleDbType.Varchar2) { Value = id });
             var result = await cmd.ExecuteScalarAsync();
@@ -317,7 +356,7 @@ public class WorkshopSummaryController : ControllerBase
         try
         {
             await using var conn = _factory.Create();
-            await conn.OpenAsync();
+            await conn.OpenWithNlsAsync();
 
             await using var checkCmd = new OracleCommand(checkSql, conn) { BindByName = true };
             checkCmd.Parameters.Add(new OracleParameter("id", OracleDbType.Varchar2) { Value = req.Id });

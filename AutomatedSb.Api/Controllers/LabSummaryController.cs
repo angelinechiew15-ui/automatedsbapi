@@ -23,6 +23,9 @@ public class LabSummaryController : ControllerBase
         _logger = logger;
     }
 
+    private static string NumExpr(string expr) =>
+        $"TO_NUMBER({expr} DEFAULT 0 ON CONVERSION ERROR)";
+
     // GET api/lab-summary?horizon=26-06
     // Returns one row per (fy_quarter, location, horizon, sb) with all TS/RTU/Cost columns.
     [HttpGet]
@@ -47,30 +50,30 @@ public class LabSummaryController : ControllerBase
                    t.loc       AS location,
                    t.horizon,
                    t.sb,
-                   CAST(SUM(TO_NUMBER(t.ts_demand     DEFAULT 0 ON CONVERSION ERROR))                                                                         AS BINARY_DOUBLE) AS ts_demand,
-                   CAST(SUM(NVL(TO_NUMBER(a_ts.cm_matrix_adder_value  DEFAULT 0 ON CONVERSION ERROR), 0))                                                     AS BINARY_DOUBLE) AS adder_ts,
-                   CAST(SUM(TO_NUMBER(t.ts_actual     DEFAULT 0 ON CONVERSION ERROR))                                                                         AS BINARY_DOUBLE) AS ts_actual,
-                   CAST(SUM(NVL(TO_NUMBER(c_ts.cm_matrix_adder_value  DEFAULT 0 ON CONVERSION ERROR), 0))                                                     AS BINARY_DOUBLE) AS change_ts,
-                   CAST(((SUM(TO_NUMBER(t.ts_demand   DEFAULT 0 ON CONVERSION ERROR))
-                           + SUM(NVL(TO_NUMBER(a_ts.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
-                          * SUM(TO_NUMBER(t.""RTU/TS"" DEFAULT 0 ON CONVERSION ERROR)) * 3)                                                                    AS BINARY_DOUBLE) AS rtu_rfc_demand,
-                   CAST(SUM(NVL(TO_NUMBER(a_rtu.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0))                                                     AS BINARY_DOUBLE) AS adder_rtu,
-                   CAST(SUM(TO_NUMBER(t.""RTU/TS""     DEFAULT 0 ON CONVERSION ERROR))                                                                        AS BINARY_DOUBLE) AS rtu_ts,
-                   CAST(SUM(TO_NUMBER(t.rtu_act       DEFAULT 0 ON CONVERSION ERROR))                                                                         AS BINARY_DOUBLE) AS rtu_actual,
-                   CAST(SUM(NVL(TO_NUMBER(c_rtu.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0))                                                     AS BINARY_DOUBLE) AS change_rtu,
-                   CAST(((SUM(TO_NUMBER(t.ts_demand   DEFAULT 0 ON CONVERSION ERROR))
-                           + SUM(NVL(TO_NUMBER(a_ts.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
-                          * SUM(TO_NUMBER(t.""RTU/TS"" DEFAULT 0 ON CONVERSION ERROR)) * 3)
-                         * SUM(TO_NUMBER(t.""COST/RTU"" DEFAULT 0 ON CONVERSION ERROR)) / 1000                                                                 AS BINARY_DOUBLE) AS cost_rfc_wo_depr,
-                   CAST(SUM(TO_NUMBER(t.depreciation  DEFAULT 0 ON CONVERSION ERROR))                                                                         AS BINARY_DOUBLE) AS depreciation,
-                   CAST(((SUM(TO_NUMBER(t.ts_demand   DEFAULT 0 ON CONVERSION ERROR))
-                           + SUM(NVL(TO_NUMBER(a_ts.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
-                          * SUM(TO_NUMBER(t.""RTU/TS"" DEFAULT 0 ON CONVERSION ERROR)) * 3)
-                         * SUM(TO_NUMBER(t.""COST/RTU"" DEFAULT 0 ON CONVERSION ERROR)) / 1000
-                         + SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR))                                                                        AS BINARY_DOUBLE) AS cost_rfc_demand,
-                   CAST(SUM(NVL(TO_NUMBER(a_cost.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0))                                                    AS BINARY_DOUBLE) AS adder_cost,
-                   CAST(SUM(TO_NUMBER(t.""COST/RTU""   DEFAULT 0 ON CONVERSION ERROR))                                                                        AS BINARY_DOUBLE) AS cost_rtu,
-                   CAST(SUM(TO_NUMBER(t.cost_act      DEFAULT 0 ON CONVERSION ERROR))                                                                         AS BINARY_DOUBLE) AS cost_actual
+               CAST(SUM({NumExpr("t.ts_demand")})                                                                               AS BINARY_DOUBLE) AS ts_demand,
+               CAST(SUM(NVL({NumExpr("a_ts.cm_matrix_adder_value")}, 0))                                                       AS BINARY_DOUBLE) AS adder_ts,
+               CAST(SUM({NumExpr("t.ts_actual")})                                                                               AS BINARY_DOUBLE) AS ts_actual,
+               CAST(SUM(NVL({NumExpr("c_ts.cm_matrix_adder_value")}, 0))                                                       AS BINARY_DOUBLE) AS change_ts,
+               CAST(((SUM({NumExpr("t.ts_demand")})
+                   + SUM(NVL({NumExpr("a_ts.cm_matrix_adder_value")}, 0)))
+                  * SUM({NumExpr(@"t.""RTU/TS""")}) * 3)                                                          AS BINARY_DOUBLE) AS rtu_rfc_demand,
+               CAST(SUM(NVL({NumExpr("a_rtu.cm_matrix_adder_value")}, 0))                                                      AS BINARY_DOUBLE) AS adder_rtu,
+               CAST(SUM({NumExpr(@"t.""RTU/TS""")})                                                                    AS BINARY_DOUBLE) AS rtu_ts,
+               CAST(SUM({NumExpr("t.rtu_act")})                                                                                 AS BINARY_DOUBLE) AS rtu_actual,
+               CAST(SUM(NVL({NumExpr("c_rtu.cm_matrix_adder_value")}, 0))                                                      AS BINARY_DOUBLE) AS change_rtu,
+               CAST(((SUM({NumExpr("t.ts_demand")})
+                   + SUM(NVL({NumExpr("a_ts.cm_matrix_adder_value")}, 0)))
+                  * SUM({NumExpr(@"t.""RTU/TS""")}) * 3)
+                 * SUM({NumExpr(@"t.""COST/RTU""")}) / 1000                                                       AS BINARY_DOUBLE) AS cost_rfc_wo_depr,
+               CAST(SUM({NumExpr("t.depreciation")})                                                                            AS BINARY_DOUBLE) AS depreciation,
+               CAST(((SUM({NumExpr("t.ts_demand")})
+                   + SUM(NVL({NumExpr("a_ts.cm_matrix_adder_value")}, 0)))
+                  * SUM({NumExpr(@"t.""RTU/TS""")}) * 3)
+                 * SUM({NumExpr(@"t.""COST/RTU""")}) / 1000
+                 + SUM({NumExpr("t.depreciation")})                                                                         AS BINARY_DOUBLE) AS cost_rfc_demand,
+               CAST(SUM(NVL({NumExpr("a_cost.cm_matrix_adder_value")}, 0))                                                     AS BINARY_DOUBLE) AS adder_cost,
+               CAST(SUM({NumExpr(@"t.""COST/RTU""")})                                                                  AS BINARY_DOUBLE) AS cost_rtu,
+               CAST(SUM({NumExpr("t.cost_act")})                                                                                AS BINARY_DOUBLE) AS cost_actual
               FROM rpt.asb_ts_actual t{AdderJoin("a_ts",   "Adder",  "TS")}{AdderJoin("c_ts",   "Change", "TS")}{AdderJoin("a_rtu",  "Adder",  "RTU")}{AdderJoin("c_rtu",  "Change", "RTU")}{AdderJoin("a_cost", "Adder",  "COST")}
              WHERE t.horizon = :horizon
                AND t.loc IS NOT NULL
@@ -83,7 +86,7 @@ public class LabSummaryController : ControllerBase
         try
         {
             await using var conn = _factory.Create();
-            await conn.OpenAsync();
+            await conn.OpenWithNlsAsync();
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
             cmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = horizon });
 
@@ -146,7 +149,7 @@ public class LabSummaryController : ControllerBase
         try
         {
             await using var conn = _factory.Create();
-            await conn.OpenAsync();
+            await conn.OpenWithNlsAsync();
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
 
             await using var reader = await cmd.ExecuteReaderAsync();
