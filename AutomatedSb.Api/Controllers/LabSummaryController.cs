@@ -51,6 +51,7 @@ public class LabSummaryController : ControllerBase
                                              t.loc AS location,
                                              t.horizon,
                                              t.sb,
+                                                   t.quarter,
                                              CAST(CASE
                                                                  WHEN cm_change.cm_matrix_change_value IS NOT NULL
                                                                      THEN TO_NUMBER(cm_change.cm_matrix_change_value DEFAULT 0 ON CONVERSION ERROR)
