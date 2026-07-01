@@ -49,42 +49,32 @@ public class CostKeyController : ControllerBase
                 return Ok(Array.Empty<object>());
             }
 
-            await using var conn = _factory.Create();
-            await conn.OpenWithNlsAsync();
-
-            await using var cmd = new OracleCommand(BuildSql(fy, loc, sb), conn) { BindByName = true };
-            cmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = targetHorizon });
-            if (!string.IsNullOrWhiteSpace(fy))  cmd.Parameters.Add(new OracleParameter("fy",  OracleDbType.Varchar2) { Value = fy.Trim() });
-            if (!string.IsNullOrWhiteSpace(loc)) cmd.Parameters.Add(new OracleParameter("loc", OracleDbType.Varchar2) { Value = loc.Trim() });
-            if (!string.IsNullOrWhiteSpace(sb))  cmd.Parameters.Add(new OracleParameter("sb",  OracleDbType.Varchar2) { Value = sb.Trim() });
-
-            await using var reader = await cmd.ExecuteReaderAsync();
-            var rawRows = new List<RawCostKeyRow>();
-
-            static double Dbl(object raw) =>
-                raw == null || raw == DBNull.Value ? 0d : Convert.ToDouble(raw);
-
-            while (await reader.ReadAsync())
+            var horizonWindow = await ResolveHorizonWindowAsync(targetHorizon, 4);
+            if (horizonWindow is null)
             {
-                rawRows.Add(new RawCostKeyRow
-                {
-                    Fy        = reader["fy"]?.ToString()        ?? string.Empty,
-                    Horizon   = reader["horizon"]?.ToString()   ?? string.Empty,
-                    FyQuarter = reader["fy_quarter"]?.ToString() ?? string.Empty,
-                    Loc       = reader["loc"]?.ToString()        ?? string.Empty,
-                    Sb        = reader["sb"]?.ToString()         ?? string.Empty,
-                    TsDemand    = Dbl(reader["ts_demand"]),
-                    AdderTs     = Dbl(reader["adder_ts"]),
-                    RtuTs       = Dbl(reader["rtu_ts"]),
-                    AdderRtu    = Dbl(reader["adder_rtu"]),
-                    CostRtu     = Dbl(reader["cost_rtu"]),
-                    Depreciation = Dbl(reader["depreciation"]),
-                    AdderCost   = Dbl(reader["adder_cost"]),
-                });
+                return Ok(Array.Empty<object>());
             }
 
+            var horizonsToLoad = new[] { horizonWindow.CurrentHorizon }
+                .Concat(horizonWindow.PastHorizons)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
             var mappingRows = await LoadMappingRowsAsync();
-            var result = BuildOverview(rawRows, mappingRows);
+            var overviewByHorizon = new Dictionary<string, List<CostKeyOverviewRow>>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var horizonValue in horizonsToLoad)
+            {
+                var rawRows = await LoadRawRowsAsync(horizonValue, fy, loc, sb);
+                overviewByHorizon[horizonValue] = BuildOverview(rawRows, mappingRows);
+            }
+
+            if (!overviewByHorizon.TryGetValue(horizonWindow.CurrentHorizon, out var currentRows))
+            {
+                return Ok(Array.Empty<object>());
+            }
+
+            var result = MergeHistoricalCosts(currentRows, overviewByHorizon, horizonWindow.PastHorizons);
             return Ok(result);
         }
         catch (OracleException ex)
@@ -106,6 +96,97 @@ public class CostKeyController : ControllerBase
         await using var cmd = new OracleCommand(sql, conn);
         var scalar = await cmd.ExecuteScalarAsync();
         return scalar == null || scalar == DBNull.Value ? null : scalar.ToString();
+    }
+
+    private async Task<HorizonWindow?> ResolveHorizonWindowAsync(string horizon, int pastCount)
+    {
+        const string sql = @"
+            SELECT rhz_id, rhz_name
+              FROM rfc_horizon
+             ORDER BY rhz_id DESC";
+
+        await using var conn = _factory.Create();
+        await conn.OpenWithNlsAsync();
+        await using var cmd = new OracleCommand(sql, conn);
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        var horizons = new List<HorizonRef>();
+        while (await reader.ReadAsync())
+        {
+            horizons.Add(new HorizonRef(
+                reader["rhz_id"] == DBNull.Value ? -1 : Convert.ToInt32(reader["rhz_id"]),
+                reader["rhz_name"]?.ToString() ?? string.Empty));
+        }
+
+        if (horizons.Count == 0)
+        {
+            return null;
+        }
+
+        var selectedIndex = -1;
+        if (int.TryParse(horizon, out var horizonId))
+        {
+            selectedIndex = horizons.FindIndex(item => item.Id == horizonId);
+        }
+
+        if (selectedIndex < 0)
+        {
+            selectedIndex = horizons.FindIndex(item => string.Equals(item.Name, horizon, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (selectedIndex < 0)
+        {
+            return new HorizonWindow(horizon.Trim(), Array.Empty<string>());
+        }
+
+        var currentHorizon = horizons[selectedIndex].Name;
+        var pastHorizons = horizons
+            .Skip(selectedIndex + 1)
+            .Take(pastCount)
+            .Select(item => item.Name)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList();
+
+        return new HorizonWindow(currentHorizon, pastHorizons);
+    }
+
+    private async Task<List<RawCostKeyRow>> LoadRawRowsAsync(string horizon, string? fy, string? loc, string? sb)
+    {
+        await using var conn = _factory.Create();
+        await conn.OpenWithNlsAsync();
+
+        await using var cmd = new OracleCommand(BuildSql(fy, loc, sb), conn) { BindByName = true };
+        cmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = horizon });
+        if (!string.IsNullOrWhiteSpace(fy)) cmd.Parameters.Add(new OracleParameter("fy", OracleDbType.Varchar2) { Value = fy.Trim() });
+        if (!string.IsNullOrWhiteSpace(loc)) cmd.Parameters.Add(new OracleParameter("loc", OracleDbType.Varchar2) { Value = loc.Trim() });
+        if (!string.IsNullOrWhiteSpace(sb)) cmd.Parameters.Add(new OracleParameter("sb", OracleDbType.Varchar2) { Value = sb.Trim() });
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        var rawRows = new List<RawCostKeyRow>();
+
+        static double Dbl(object raw) =>
+            raw == null || raw == DBNull.Value ? 0d : Convert.ToDouble(raw);
+
+        while (await reader.ReadAsync())
+        {
+            rawRows.Add(new RawCostKeyRow
+            {
+                Fy = reader["fy"]?.ToString() ?? string.Empty,
+                Horizon = reader["horizon"]?.ToString() ?? string.Empty,
+                FyQuarter = reader["fy_quarter"]?.ToString() ?? string.Empty,
+                Loc = reader["loc"]?.ToString() ?? string.Empty,
+                Sb = reader["sb"]?.ToString() ?? string.Empty,
+                TsDemand = Dbl(reader["ts_demand"]),
+                AdderTs = Dbl(reader["adder_ts"]),
+                RtuTs = Dbl(reader["rtu_ts"]),
+                AdderRtu = Dbl(reader["adder_rtu"]),
+                CostRtu = Dbl(reader["cost_rtu"]),
+                Depreciation = Dbl(reader["depreciation"]),
+                AdderCost = Dbl(reader["adder_cost"]),
+            });
+        }
+
+        return rawRows;
     }
 
     // Mirrors the LabSummaryController query pattern: reads rpt.asb_ts_actual directly
@@ -314,8 +395,51 @@ public class CostKeyController : ControllerBase
                     Math.Round(row.CcPercent, 4),
                     Math.Round(row.CostKeur, 2),
                     key,
-                    Math.Round(totalCostDemand, 2));
+                    Math.Round(totalCostDemand, 2),
+                    new Dictionary<string, double?>(StringComparer.OrdinalIgnoreCase));
             })
+            .ToList();
+    }
+
+    private static List<CostKeyOverviewRow> MergeHistoricalCosts(
+        IReadOnlyList<CostKeyOverviewRow> currentRows,
+        IReadOnlyDictionary<string, List<CostKeyOverviewRow>> overviewByHorizon,
+        IReadOnlyList<string> pastHorizons)
+    {
+        var currentByKey = currentRows.ToDictionary(
+            row => (row.Fy, row.Loc, row.ServiceBundle, row.ClientCorridor, row.WbsElement),
+            row => row);
+
+        foreach (var pastHorizon in pastHorizons)
+        {
+            if (!overviewByHorizon.TryGetValue(pastHorizon, out var pastRows))
+            {
+                continue;
+            }
+
+            var pastByKey = pastRows.ToDictionary(
+                row => (row.Fy, row.Loc, row.ServiceBundle, row.ClientCorridor, row.WbsElement),
+                row => row);
+
+            foreach (var currentRow in currentByKey.Values)
+            {
+                if (pastByKey.TryGetValue((currentRow.Fy, currentRow.Loc, currentRow.ServiceBundle, currentRow.ClientCorridor, currentRow.WbsElement), out var pastRow))
+                {
+                    currentRow.HistoricalCosts[pastHorizon] = pastRow.CostKeur;
+                }
+                else
+                {
+                    currentRow.HistoricalCosts[pastHorizon] = null;
+                }
+            }
+        }
+
+        return currentByKey.Values
+            .OrderBy(row => row.Fy)
+            .ThenBy(row => row.Loc)
+            .ThenBy(row => row.ServiceBundle)
+            .ThenBy(row => row.ClientCorridor)
+            .ThenBy(row => row.WbsElement)
             .ToList();
     }
 
@@ -396,5 +520,10 @@ public class CostKeyController : ControllerBase
         double CcPercent,
         double CostKeur,
         double? Key,
-        double TotalCostDemand);
+        double TotalCostDemand,
+        Dictionary<string, double?> HistoricalCosts);
+
+    private sealed record HorizonWindow(string CurrentHorizon, IReadOnlyList<string> PastHorizons);
+
+    private sealed record HorizonRef(int Id, string Name);
 }
