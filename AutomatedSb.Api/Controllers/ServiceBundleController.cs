@@ -495,25 +495,23 @@ public class ServiceBundleController : ControllerBase
                      AND {alias}.cm_matrix_adder_type = '{adderType}'
                      AND {alias}.cm_matrix_adder_for = '{adderFor}'";
 
-    // Cost-demand components per fiscal quarter:
-    //   rtu_rfc = ((SUM(ts_demand) + SUM(adder_ts)) * SUM(effective RTU/TS) * 3) + SUM(adder_rtu)
-    //             i.e. the full RTU demand shown in the table/chart.
-    //   rfc_wo = rtu_rfc * SUM("COST/RTU") / 1000
-    //            i.e. (RTU demand * cost/rtu) / 1000  ("Cost RFC w/o Depreciation")
-    //   depr   = SUM(depreciation)                            ("Cost RFC Depreciation")
-    //   addc   = SUM(adder_cost)                              ("Adder Value Cost Demand")
-    // All three are multiplied by 4 for FY-only rows (quarter IS NULL) to annualise.
+        // Cost-demand components per fiscal quarter:
+        //   rtu_rfc = ((SUM(ts_demand) + SUM(adder_ts)) * SUM(effective RTU/TS) * 3) + SUM(adder_rtu)
+        //             i.e. the full RTU demand shown in the table/chart.
+        //   rfc_wo = rtu_rfc * SUM("COST/RTU") / 1000
+        //            i.e. (RTU demand * cost/rtu) / 1000  ("Cost RFC w/o Depreciation")
+        //   depr   = SUM(depreciation)                            ("Cost RFC Depreciation")
+        //   addc   = SUM(adder_cost)                              ("Adder Value Cost Demand")
     private static string CostDemandComponentsSql(string? loc)
     {
         var locClause = string.IsNullOrWhiteSpace(loc) ? "" : " AND (t.loc = :loc OR t.loc LIKE :loc || ' %')";
         const string labelExpr = "CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END";
         return $@"SELECT label,
-                         CAST(CASE WHEN isq = 1 THEN rfc_wo ELSE rfc_wo * 4 END AS BINARY_DOUBLE) AS rfc_wo,
-                         CAST(CASE WHEN isq = 1 THEN depr   ELSE depr   * 4 END AS BINARY_DOUBLE) AS depr,
-                         CAST(CASE WHEN isq = 1 THEN addc   ELSE addc   * 4 END AS BINARY_DOUBLE) AS addc
+                                                 CAST(rfc_wo AS BINARY_DOUBLE) AS rfc_wo,
+                                                 CAST(depr   AS BINARY_DOUBLE) AS depr,
+                                                 CAST(addc   AS BINARY_DOUBLE) AS addc
                     FROM (
                       SELECT {labelExpr} AS label,
-                             CASE WHEN t.quarter IS NULL THEN 0 ELSE 1 END AS isq,
                                                          (((SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR))
                                                                  + SUM(NVL(TO_NUMBER(ats.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
                                                              * SUM({ChangeMappedRtuTsExpr()}) * 3)
@@ -523,8 +521,8 @@ public class ServiceBundleController : ControllerBase
                              SUM(NVL(TO_NUMBER(ac.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)) AS addc
                         FROM rpt.asb_ts_actual t
 {ChangeMappedJoin()}{AdderJoin("ats", "Adder", "TS")}{AdderJoin("artu", "Adder", "RTU")}{AdderJoin("ac", "Adder", "COST")}
-                       WHERE t.sb = :sbName AND t.horizon = :horizon{locClause}
-                       GROUP BY {labelExpr}, CASE WHEN t.quarter IS NULL THEN 0 ELSE 1 END
+                                             WHERE t.sb = :sbName AND t.horizon = :horizon{locClause}
+                                             GROUP BY {labelExpr}
                     )
                    ORDER BY label ASC";
     }
