@@ -35,53 +35,79 @@ public class LabSummaryController : ControllerBase
             return BadRequest(new { success = false, message = "horizon is required" });
 
         // Adder JOIN helper — reused 5 times for TS Adder, TS Change, RTU Adder, RTU Change, COST Adder
-        static string AdderJoin(string alias, string type, string forMeasure) => $@"
+        static string AdderJoin(string baseAlias, string alias, string type, string forMeasure) => $@"
               LEFT JOIN rpt.cm_matrix_sb_adder {alias}
-                ON t.loc     = {alias}.cm_matrix_adder_location
-               AND t.sb      = {alias}.cm_matrix_adder_sb_name
-               AND t.fy || '-' || t.quarter = {alias}.cm_matrix_adder_fy || '-' || {alias}.cm_matrix_adder_quarter
-               AND t.horizon = {alias}.cm_matrix_adder_horizon
+            ON {baseAlias}.loc     = {alias}.cm_matrix_adder_location
+               AND {baseAlias}.sb      = {alias}.cm_matrix_adder_sb_name
+               AND {baseAlias}.fy || '-' || {baseAlias}.quarter = {alias}.cm_matrix_adder_fy || '-' || {alias}.cm_matrix_adder_quarter
+               AND {baseAlias}.horizon = {alias}.cm_matrix_adder_horizon
                AND {alias}.cm_matrix_adder_type = '{type}'
                AND {alias}.cm_matrix_adder_for  = '{forMeasure}'";
 
         var sql = $@"
-            SELECT CASE WHEN t.quarter IS NULL THEN t.fy
-                        ELSE t.fy || ' ' || t.quarter END AS fy_quarter,
-                   t.loc       AS location,
-                   t.horizon,
-                   t.sb,
-               CAST(SUM({NumExpr("t.ts_demand")})                                                                               AS BINARY_DOUBLE) AS ts_demand,
-               CAST(SUM(NVL({NumExpr("a_ts.cm_matrix_adder_value")}, 0))                                                       AS BINARY_DOUBLE) AS adder_ts,
-               CAST(SUM({NumExpr("t.ts_actual")})                                                                               AS BINARY_DOUBLE) AS ts_actual,
-               CAST(SUM(NVL({NumExpr("c_ts.cm_matrix_adder_value")}, 0))                                                       AS BINARY_DOUBLE) AS change_ts,
-               CAST(((SUM({NumExpr("t.ts_demand")})
-                   + SUM(NVL({NumExpr("a_ts.cm_matrix_adder_value")}, 0)))
-                  * SUM({NumExpr(@"t.""RTU/TS""")}) * 3)                                                          AS BINARY_DOUBLE) AS rtu_rfc_demand,
-               CAST(SUM(NVL({NumExpr("a_rtu.cm_matrix_adder_value")}, 0))                                                      AS BINARY_DOUBLE) AS adder_rtu,
-               CAST(SUM({NumExpr(@"t.""RTU/TS""")})                                                                    AS BINARY_DOUBLE) AS rtu_ts,
-               CAST(SUM({NumExpr("t.rtu_act")})                                                                                 AS BINARY_DOUBLE) AS rtu_actual,
-               CAST(SUM(NVL({NumExpr("c_rtu.cm_matrix_adder_value")}, 0))                                                      AS BINARY_DOUBLE) AS change_rtu,
-               CAST(((SUM({NumExpr("t.ts_demand")})
-                   + SUM(NVL({NumExpr("a_ts.cm_matrix_adder_value")}, 0)))
-                  * SUM({NumExpr(@"t.""RTU/TS""")}) * 3)
-                 * SUM({NumExpr(@"t.""COST/RTU""")}) / 1000                                                       AS BINARY_DOUBLE) AS cost_rfc_wo_depr,
-               CAST(SUM({NumExpr("t.depreciation")})                                                                            AS BINARY_DOUBLE) AS depreciation,
-               CAST(((SUM({NumExpr("t.ts_demand")})
-                   + SUM(NVL({NumExpr("a_ts.cm_matrix_adder_value")}, 0)))
-                  * SUM({NumExpr(@"t.""RTU/TS""")}) * 3)
-                 * SUM({NumExpr(@"t.""COST/RTU""")}) / 1000
-                 + SUM({NumExpr("t.depreciation")})                                                                         AS BINARY_DOUBLE) AS cost_rfc_demand,
-               CAST(SUM(NVL({NumExpr("a_cost.cm_matrix_adder_value")}, 0))                                                     AS BINARY_DOUBLE) AS adder_cost,
-               CAST(SUM({NumExpr(@"t.""COST/RTU""")})                                                                  AS BINARY_DOUBLE) AS cost_rtu,
-               CAST(SUM({NumExpr("t.cost_act")})                                                                                AS BINARY_DOUBLE) AS cost_actual
-              FROM rpt.asb_ts_actual t{AdderJoin("a_ts",   "Adder",  "TS")}{AdderJoin("c_ts",   "Change", "TS")}{AdderJoin("a_rtu",  "Adder",  "RTU")}{AdderJoin("c_rtu",  "Change", "RTU")}{AdderJoin("a_cost", "Adder",  "COST")}
-             WHERE t.horizon = :horizon
-               AND t.loc IS NOT NULL
-               AND t.sb  IS NOT NULL
-             GROUP BY CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END,
-                      t.loc, t.horizon, t.sb
-             ORDER BY CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END ASC,
-                      t.loc ASC, t.sb ASC";
+                        WITH base AS (
+                                SELECT CASE WHEN t.quarter IS NULL THEN t.fy
+                                                        ELSE t.fy || ' ' || t.quarter END AS fy_quarter,
+                                             t.loc AS location,
+                                             t.horizon,
+                                             t.sb,
+                                             CAST(CASE
+                                                             WHEN cm_change.cm_matrix_change_mappedvalue IS NOT NULL
+                                                                     THEN TO_NUMBER(cm_change.cm_matrix_change_mappedvalue DEFAULT 0 ON CONVERSION ERROR)
+                                                       ELSE {NumExpr(@"t.""RTU/TS""")}
+                                                        END AS BINARY_DOUBLE) AS rtu_ts_value,
+                                             t.ts_demand,
+                                             t.ts_actual,
+                                             t.rtu_act,
+                                             t.depreciation,
+                                             t.cost_act,
+                                                 t.""COST/RTU"" AS cost_rtu
+                                    FROM rpt.asb_ts_actual t
+                                    LEFT JOIN rpt.cm_matrix_sb_change_mappedvalue cm_change
+                                        ON t.sb = cm_change.cm_matrix_change_sb_name
+                                     AND t.loc = cm_change.cm_matrix_change_location
+                                     AND t.horizon = cm_change.cm_matrix_change_horizon
+                                     AND t.fy = cm_change.cm_matrix_change_fy
+                                    WHERE t.horizon = :horizon
+                                        AND t.loc IS NOT NULL
+                                        AND t.sb  IS NOT NULL
+                        )
+                        SELECT base.fy_quarter,
+                                     base.location,
+                                     base.horizon,
+                                     base.sb,
+                             CAST(SUM({NumExpr("base.ts_demand")})                                                                         AS BINARY_DOUBLE) AS ts_demand,
+                             CAST(SUM(NVL({NumExpr("a_ts.cm_matrix_adder_value")}, 0))                                                     AS BINARY_DOUBLE) AS adder_ts,
+                             CAST(SUM({NumExpr("base.ts_actual")})                                                                         AS BINARY_DOUBLE) AS ts_actual,
+                             CAST(SUM(NVL({NumExpr("c_ts.cm_matrix_adder_value")}, 0))                                                     AS BINARY_DOUBLE) AS change_ts,
+                             CAST(((SUM({NumExpr("base.ts_demand")})
+                                     + SUM(NVL({NumExpr("a_ts.cm_matrix_adder_value")}, 0)))
+                                    * SUM(base.rtu_ts_value) * 3)                                                                               AS BINARY_DOUBLE) AS rtu_rfc_demand,
+                             CAST(SUM(NVL({NumExpr("a_rtu.cm_matrix_adder_value")}, 0))                                                    AS BINARY_DOUBLE) AS adder_rtu,
+                             CAST(SUM(base.rtu_ts_value)                                                                                    AS BINARY_DOUBLE) AS rtu_ts,
+                             CAST(SUM({NumExpr("base.rtu_act")})                                                                           AS BINARY_DOUBLE) AS rtu_actual,
+                             CAST(SUM(NVL({NumExpr("c_rtu.cm_matrix_adder_value")}, 0))                                                    AS BINARY_DOUBLE) AS change_rtu,
+                             CAST(((SUM({NumExpr("base.ts_demand")})
+                                     + SUM(NVL({NumExpr("a_ts.cm_matrix_adder_value")}, 0)))
+                                    * SUM(base.rtu_ts_value) * 3)
+                                 * SUM({NumExpr("base.cost_rtu")}) / 1000                                                                    AS BINARY_DOUBLE) AS cost_rfc_wo_depr,
+                             CAST(SUM({NumExpr("base.depreciation")})                                                                      AS BINARY_DOUBLE) AS depreciation,
+                             CAST(((SUM({NumExpr("base.ts_demand")})
+                                     + SUM(NVL({NumExpr("a_ts.cm_matrix_adder_value")}, 0)))
+                                    * SUM(base.rtu_ts_value) * 3)
+                                 * SUM({NumExpr("base.cost_rtu")}) / 1000
+                                 + SUM({NumExpr("base.depreciation")})                                                                       AS BINARY_DOUBLE) AS cost_rfc_demand,
+                             CAST(SUM(NVL({NumExpr("a_cost.cm_matrix_adder_value")}, 0))                                                   AS BINARY_DOUBLE) AS adder_cost,
+                             CAST(SUM({NumExpr("base.cost_rtu")})                                                                          AS BINARY_DOUBLE) AS cost_rtu,
+                             CAST(SUM({NumExpr("base.cost_act")})                                                                          AS BINARY_DOUBLE) AS cost_actual
+                              FROM base{AdderJoin("base", "a_ts",   "Adder",  "TS")}{AdderJoin("base", "c_ts",   "Change", "TS")}{AdderJoin("base", "a_rtu",  "Adder",  "RTU")}{AdderJoin("base", "c_rtu",  "Change", "RTU")}{AdderJoin("base", "a_cost", "Adder",  "COST")}
+                         GROUP BY base.fy_quarter,
+                                            base.location,
+                                            base.horizon,
+                                            base.sb
+                         ORDER BY base.fy_quarter ASC,
+                                            base.location ASC,
+                                            base.sb ASC";
 
         try
         {
