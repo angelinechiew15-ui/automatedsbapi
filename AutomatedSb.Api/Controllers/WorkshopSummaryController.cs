@@ -125,6 +125,7 @@ public class WorkshopSummaryController : ControllerBase
                     SELECT
                         t.sb,
                         t.fy,
+                        CAST(NVL(SUM({NumExpr("t.ts_demand")}), 0) AS BINARY_DOUBLE) AS ts_demand,
                             CAST(NVL(SUM((( {NumExpr("t.ts_demand")} + NVL({NumExpr("a_ts.cm_matrix_adder_value")}, 0))
                                   * 3 * {NumExpr(@"t.""RTU/TS""")})
                                          + NVL({NumExpr("a_rtu.cm_matrix_adder_value")}, 0)), 0) AS BINARY_DOUBLE) AS rtu_demand,
