@@ -430,6 +430,52 @@ public class ServiceBundleController : ControllerBase
         }
     }
 
+    // GET api/service-bundle/details?sbId=175&horizon=26-06
+    // Returns the detail rows shown after the charts plus the responsibility and
+    // approval status summary used by the legacy Service Bundle page.
+    [HttpGet("details")]
+    public async Task<ActionResult> GetDetails([FromQuery] string sbId, [FromQuery] string horizon)
+    {
+        if (string.IsNullOrWhiteSpace(sbId))
+        {
+            return BadRequest(new { success = false, message = "sbId is required." });
+        }
+
+        if (string.IsNullOrWhiteSpace(horizon))
+        {
+            return BadRequest(new { success = false, message = "horizon is required." });
+        }
+
+        try
+        {
+            var horizonContext = await ResolveHorizonContextAsync(horizon);
+            if (horizonContext is null)
+            {
+                return BadRequest(new { success = false, message = $"Unknown horizon '{horizon}'." });
+            }
+
+            if (!int.TryParse(sbId, out var sbIdNum))
+            {
+                return BadRequest(new { success = false, message = "sbId must be numeric." });
+            }
+
+            var detailRows = await QueryServiceBundleDetailRowsAsync(sbIdNum, horizon);
+            var responsibility = await QueryServiceBundleResponsibilityAsync(sbIdNum, horizonContext.ApprovalHorizonId);
+
+            return Ok(new
+            {
+                success = true,
+                detailRows,
+                responsibility,
+            });
+        }
+        catch (OracleException ex)
+        {
+            _logger.LogError(ex, "GetDetails failed for sbId={SbId}", sbId);
+            return StatusCode(500, new { success = false, message = ex.Message });
+        }
+    }
+
     private async Task<string> GetSbNameAsync(string sbId)
     {
         await using var conn = _factory.Create();
@@ -440,6 +486,183 @@ public class ServiceBundleController : ControllerBase
         cmd.Parameters.Add(new OracleParameter("sbId", sbId));
         var scalar = await cmd.ExecuteScalarAsync();
         return scalar == null || scalar == DBNull.Value ? "" : scalar.ToString() ?? "";
+    }
+
+    private sealed record ServiceBundleDetailRow(string Horizon, string TsDetails, string RtuDetails, string CostDetails);
+
+    private sealed record ServiceBundleResponsibility(
+        string ResCCO,
+        string ResSBown,
+        string ResRFC,
+        string ResCBO,
+        string ResPR,
+        string ResCFR,
+        string ResSBstatus);
+
+    private sealed record HorizonContext(int ApprovalHorizonId, string HorizonText);
+
+    private async Task<HorizonContext?> ResolveHorizonContextAsync(string horizon)
+    {
+        const string byIdSql = @"
+            SELECT rhz_id, rhz_name
+              FROM rfc_horizon
+             WHERE rhz_id = :horizonId";
+
+        const string byNameSql = @"
+            SELECT rhz_id, rhz_name
+              FROM rfc_horizon
+             WHERE rhz_name = :horizonName";
+
+        await using var conn = _realisFactory.Create();
+        await conn.OpenAsync();
+
+        await using var cmd = new OracleCommand(int.TryParse(horizon, out _)
+            ? byIdSql
+            : byNameSql, conn)
+        {
+            BindByName = true,
+        };
+
+        if (int.TryParse(horizon, out var horizonId))
+        {
+            cmd.Parameters.Add(new OracleParameter("horizonId", OracleDbType.Int32) { Value = horizonId });
+        }
+        else
+        {
+            cmd.Parameters.Add(new OracleParameter("horizonName", OracleDbType.Varchar2) { Value = horizon });
+        }
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return null;
+        }
+
+        return new HorizonContext(
+            Convert.ToInt32(reader["rhz_id"]),
+            reader["rhz_name"]?.ToString() ?? horizon);
+    }
+
+    private static List<string> BuildDetailHorizons(string horizon)
+    {
+        if (string.IsNullOrWhiteSpace(horizon) || horizon.Length < 5)
+        {
+            return new List<string> { horizon };
+        }
+
+        var suffix = horizon.Substring(horizon.Length - 2);
+        var currentYear = DateTime.Now.Year.ToString().Substring(2);
+        var filterYear = $"{currentYear}-{suffix}";
+
+        return suffix switch
+        {
+            "03" => new List<string> { filterYear },
+            "06" => new List<string> { filterYear, $"{currentYear}-03" },
+            "09" => new List<string> { filterYear, $"{currentYear}-03", $"{currentYear}-06" },
+            "12" => new List<string> { filterYear, $"{currentYear}-03", $"{currentYear}-06", $"{currentYear}-09" },
+            _ => new List<string> { horizon },
+        };
+    }
+
+    private async Task<List<ServiceBundleDetailRow>> QueryServiceBundleDetailRowsAsync(int sbId, string horizon)
+    {
+        var horizons = BuildDetailHorizons(horizon);
+        var binds = horizons.Select((_, index) => $":h{index}").ToArray();
+        var sql = $@"
+            SELECT cm_matrix_sb_detail_horizon AS horizon,
+                   cm_matrix_sb_detail_ts       AS ts_details,
+                   cm_matrix_sb_detail_rtu      AS rtu_details,
+                   cm_matrix_sb_detail_cost     AS cost_details
+              FROM cm_matrix_sb_detail_info
+             WHERE cm_matrix_sb_detail_sb_id = :sbId
+               AND cm_matrix_sb_detail_horizon IN ({string.Join(", ", binds)})
+             ORDER BY cm_matrix_sb_detail_id ASC";
+
+        var rows = new List<ServiceBundleDetailRow>();
+        await using var conn = _factory.Create();
+        await conn.OpenWithNlsAsync();
+        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+        cmd.Parameters.Add(new OracleParameter("sbId", OracleDbType.Int32) { Value = sbId });
+        for (var index = 0; index < horizons.Count; index++)
+        {
+            cmd.Parameters.Add(new OracleParameter($"h{index}", OracleDbType.Varchar2) { Value = horizons[index] });
+        }
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            rows.Add(new ServiceBundleDetailRow(
+                reader["horizon"]?.ToString() ?? "",
+                reader["ts_details"]?.ToString() ?? "",
+                reader["rtu_details"]?.ToString() ?? "",
+                reader["cost_details"]?.ToString() ?? ""));
+        }
+
+        return rows;
+    }
+
+    private async Task<ServiceBundleResponsibility> QueryServiceBundleResponsibilityAsync(int sbId, int approvalHorizonId)
+    {
+        const string responsibilitySql = @"
+            SELECT sb_owner,
+                   planning_responsible,
+                   client_corridor_owner,
+                   client_rfc_manager,
+                   client_budget_owner,
+                   client_finance_responsible
+              FROM V_SB_RES_OWNER
+             WHERE cm_matrix_sb_id = :sbId";
+
+        const string statusSql = @"
+            SELECT cm_matrix_sb_approval_sb_status AS sb_status
+              FROM cm_matrix_sb_approval
+             WHERE cm_matrix_sb_approval_sb_id = :sbId
+               AND cm_matrix_sb_approval_horizon_id = :approvalHorizonId";
+
+        string sbOwner = "";
+        string planningResponsible = "";
+        string corridorOwner = "";
+        string rfcManager = "";
+        string budgetOwner = "";
+        string financeResponsible = "";
+        string sbStatus = "";
+
+        await using (var conn = _factory.Create())
+        {
+            await conn.OpenWithNlsAsync();
+
+            await using (var cmd = new OracleCommand(responsibilitySql, conn) { BindByName = true })
+            {
+                cmd.Parameters.Add(new OracleParameter("sbId", OracleDbType.Int32) { Value = sbId });
+                await using var reader = await cmd.ExecuteReaderAsync();
+                if (await reader.ReadAsync())
+                {
+                    sbOwner = reader["sb_owner"]?.ToString() ?? "";
+                    planningResponsible = reader["planning_responsible"]?.ToString() ?? "";
+                    corridorOwner = reader["client_corridor_owner"]?.ToString() ?? "";
+                    rfcManager = reader["client_rfc_manager"]?.ToString() ?? "";
+                    budgetOwner = reader["client_budget_owner"]?.ToString() ?? "";
+                    financeResponsible = reader["client_finance_responsible"]?.ToString() ?? "";
+                }
+            }
+
+            await using (var cmd = new OracleCommand(statusSql, conn) { BindByName = true })
+            {
+                cmd.Parameters.Add(new OracleParameter("sbId", OracleDbType.Int32) { Value = sbId });
+                cmd.Parameters.Add(new OracleParameter("approvalHorizonId", OracleDbType.Int32) { Value = approvalHorizonId });
+                var scalar = await cmd.ExecuteScalarAsync();
+                sbStatus = scalar == null || scalar == DBNull.Value ? "" : scalar.ToString() ?? "";
+            }
+        }
+
+        return new ServiceBundleResponsibility(
+            corridorOwner,
+            sbOwner,
+            rfcManager,
+            budgetOwner,
+            planningResponsible,
+            financeResponsible,
+            sbStatus);
     }
 
     // Builds a time-series SQL over the base table for the given measure plus its
