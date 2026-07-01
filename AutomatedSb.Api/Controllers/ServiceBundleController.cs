@@ -476,6 +476,106 @@ public class ServiceBundleController : ControllerBase
         }
     }
 
+    // POST api/service-bundle/details
+    // Inserts or updates a single detailed service-bundle note row.
+    [HttpPost("details")]
+    public async Task<ActionResult> SaveDetails([FromBody] ServiceBundleDetailUpsertRequest request)
+    {
+        if (request is null)
+        {
+            return BadRequest(new { success = false, message = "Request body is required." });
+        }
+
+        if (request.SbId <= 0)
+        {
+            return BadRequest(new { success = false, message = "sbId is required." });
+        }
+
+        var horizon = NormalizeDetailHorizon(request.Horizon);
+        if (string.IsNullOrWhiteSpace(horizon))
+        {
+            return BadRequest(new { success = false, message = "horizon is required." });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.TsDetails) && string.IsNullOrWhiteSpace(request.RtuDetails) && string.IsNullOrWhiteSpace(request.CostDetails))
+        {
+            return BadRequest(new { success = false, message = "At least one detail column must contain text." });
+        }
+
+        try
+        {
+            await using var conn = _factory.Create();
+            await conn.OpenWithNlsAsync();
+
+            const string existsSql = @"
+                SELECT 1
+                  FROM cm_matrix_sb_detail_info
+                 WHERE cm_matrix_sb_detail_sb_id = :sbId
+                   AND cm_matrix_sb_detail_horizon = :horizon";
+
+            await using var existsCmd = new OracleCommand(existsSql, conn) { BindByName = true };
+            existsCmd.Parameters.Add(new OracleParameter("sbId", OracleDbType.Int32) { Value = request.SbId });
+            existsCmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = horizon });
+
+            var exists = await existsCmd.ExecuteScalarAsync();
+
+            if (exists is null || exists == DBNull.Value)
+            {
+                const string insertSql = @"
+                    INSERT INTO cm_matrix_sb_detail_info (
+                        cm_matrix_sb_detail_sb_id,
+                        cm_matrix_sb_detail_horizon,
+                        cm_matrix_sb_detail_ts,
+                        cm_matrix_sb_detail_rtu,
+                        cm_matrix_sb_detail_cost,
+                        cm_matrix_sb_detail_lastupdate)
+                    VALUES (
+                        :sbId,
+                        :horizon,
+                        :tsDetails,
+                        :rtuDetails,
+                        :costDetails,
+                        :lastUpdate)";
+
+                await using var insertCmd = new OracleCommand(insertSql, conn) { BindByName = true };
+                insertCmd.Parameters.Add(new OracleParameter("sbId", OracleDbType.Int32) { Value = request.SbId });
+                insertCmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = horizon });
+                insertCmd.Parameters.Add(new OracleParameter("tsDetails", OracleDbType.Clob) { Value = request.TsDetails ?? string.Empty });
+                insertCmd.Parameters.Add(new OracleParameter("rtuDetails", OracleDbType.Clob) { Value = request.RtuDetails ?? string.Empty });
+                insertCmd.Parameters.Add(new OracleParameter("costDetails", OracleDbType.Clob) { Value = request.CostDetails ?? string.Empty });
+                insertCmd.Parameters.Add(new OracleParameter("lastUpdate", OracleDbType.TimeStamp) { Value = DateTime.Now });
+                await insertCmd.ExecuteNonQueryAsync();
+            }
+            else
+            {
+                const string updateSql = @"
+                    UPDATE cm_matrix_sb_detail_info
+                       SET cm_matrix_sb_detail_ts = :tsDetails,
+                           cm_matrix_sb_detail_rtu = :rtuDetails,
+                           cm_matrix_sb_detail_cost = :costDetails,
+                           cm_matrix_sb_detail_lastupdate = :lastUpdate
+                     WHERE cm_matrix_sb_detail_sb_id = :sbId
+                       AND cm_matrix_sb_detail_horizon = :horizon";
+
+                await using var updateCmd = new OracleCommand(updateSql, conn) { BindByName = true };
+                updateCmd.Parameters.Add(new OracleParameter("tsDetails", OracleDbType.Clob) { Value = request.TsDetails ?? string.Empty });
+                updateCmd.Parameters.Add(new OracleParameter("rtuDetails", OracleDbType.Clob) { Value = request.RtuDetails ?? string.Empty });
+                updateCmd.Parameters.Add(new OracleParameter("costDetails", OracleDbType.Clob) { Value = request.CostDetails ?? string.Empty });
+                updateCmd.Parameters.Add(new OracleParameter("lastUpdate", OracleDbType.TimeStamp) { Value = DateTime.Now });
+                updateCmd.Parameters.Add(new OracleParameter("sbId", OracleDbType.Int32) { Value = request.SbId });
+                updateCmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = horizon });
+                await updateCmd.ExecuteNonQueryAsync();
+            }
+
+            return Ok(new { success = true, horizon });
+        }
+        catch (OracleException ex)
+        {
+            _logger.LogError(ex, "SaveDetails failed for sbId={SbId}, horizon={Horizon}", request.SbId, request.Horizon);
+            return StatusCode(500, new { success = false, message = ex.Message });
+        }
+    }
+
     private async Task<string> GetSbNameAsync(string sbId)
     {
         await using var conn = _factory.Create();
@@ -490,6 +590,8 @@ public class ServiceBundleController : ControllerBase
 
     private sealed record ServiceBundleDetailRow(string Horizon, string TsDetails, string RtuDetails, string CostDetails);
 
+    public sealed record ServiceBundleDetailUpsertRequest(int SbId, string Horizon, string? TsDetails, string? RtuDetails, string? CostDetails);
+
     private sealed record ServiceBundleResponsibility(
         string ResCCO,
         string ResSBown,
@@ -500,6 +602,26 @@ public class ServiceBundleController : ControllerBase
         string ResSBstatus);
 
     private sealed record HorizonContext(int ApprovalHorizonId, string HorizonText);
+
+    private static string NormalizeDetailHorizon(string horizon)
+    {
+        var normalized = (horizon ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.Empty;
+        }
+
+        normalized = normalized.Replace("RFC", string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
+        if (!normalized.Contains('-'))
+        {
+            if (normalized.Length == 4)
+            {
+                normalized = normalized.Insert(2, "-");
+            }
+        }
+
+        return normalized;
+    }
 
     private async Task<HorizonContext?> ResolveHorizonContextAsync(string horizon)
     {
