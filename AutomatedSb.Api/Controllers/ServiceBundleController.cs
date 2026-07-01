@@ -34,6 +34,17 @@ public class ServiceBundleController : ControllerBase
                      AND {baseAlias}.horizon = {changeAlias}.cm_matrix_change_horizon
                      AND {baseAlias}.fy = {changeAlias}.cm_matrix_change_fy";
 
+    private static string EffectiveLocationExpr(string alias = "t") => $@"
+        CASE
+            WHEN {alias}.loc LIKE 'RPT %' OR {alias}.loc LIKE 'ASE %' THEN {alias}.loc
+            ELSE NVL((
+                SELECT MAX(m.cm_matrix_sb_ext_mapping_rpt_loc)
+                  FROM rpt.cm_matrix_sb_ext_mapping m
+                 WHERE m.cm_matrix_sb_ext_mapping_ext_loc = {alias}.loc
+                   AND (m.cm_matrix_sb_ext_for_ts = 'Y' OR m.cm_matrix_sb_ext_for_rtu = 'Y')
+            ), {alias}.loc)
+        END";
+
     private static string LocationClause(string? loc, string alias = "t")
     {
         if (string.IsNullOrWhiteSpace(loc))
@@ -46,10 +57,10 @@ public class ServiceBundleController : ControllerBase
             normalized.Equals("RPT MUC ETC", StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals("RPT VI", StringComparison.OrdinalIgnoreCase))
         {
-            return $" AND {alias}.loc = :loc";
+            return $" AND ({alias}.loc = :loc OR EXISTS (SELECT 1 FROM rpt.cm_matrix_sb_ext_mapping m WHERE m.cm_matrix_sb_ext_mapping_ext_loc = {alias}.loc AND m.cm_matrix_sb_ext_mapping_rpt_loc = :loc AND (m.cm_matrix_sb_ext_for_ts = 'Y' OR m.cm_matrix_sb_ext_for_rtu = 'Y')))";
         }
 
-        return $" AND ({alias}.loc = :loc OR {alias}.loc LIKE :loc || ' %')";
+        return $" AND ({alias}.loc = :loc OR {alias}.loc LIKE :loc || ' %' OR EXISTS (SELECT 1 FROM rpt.cm_matrix_sb_ext_mapping m WHERE m.cm_matrix_sb_ext_mapping_ext_loc = {alias}.loc AND m.cm_matrix_sb_ext_mapping_rpt_loc = :loc AND (m.cm_matrix_sb_ext_for_ts = 'Y' OR m.cm_matrix_sb_ext_for_rtu = 'Y')))";
     }
 
     public ServiceBundleController(
@@ -279,13 +290,14 @@ public class ServiceBundleController : ControllerBase
         string sbName, string horizon, IReadOnlyList<string> labRoots)
     {
         // One pass: per-loc sums of the actual measures for this SB + horizon.
-        var sql = @"SELECT t.loc AS loc,
+        var locExpr = EffectiveLocationExpr("t");
+        var sql = $@"SELECT {locExpr} AS loc,
                            SUM(TO_NUMBER(t.ts_actual DEFAULT 0 ON CONVERSION ERROR)) AS tsa,
                            SUM(TO_NUMBER(t.rtu_act   DEFAULT 0 ON CONVERSION ERROR)) AS rtua,
                            SUM(TO_NUMBER(t.cost_act  DEFAULT 0 ON CONVERSION ERROR)) AS costa
                       FROM rpt.asb_ts_actual t
                      WHERE t.sb = :sbName AND t.horizon = :horizon AND t.loc IS NOT NULL
-                     GROUP BY t.loc";
+                     GROUP BY {locExpr}";
 
         var locSums = new List<(string Loc, double Tsa, double Rtua, double Costa)>();
         await using (var conn = _factory.Create())
@@ -751,13 +763,14 @@ public class ServiceBundleController : ControllerBase
 
         // 4. sum RTU per location from the actuals.
         var locClause = LocationClause(loc);
-        var sql = $@"SELECT t.loc AS label,
+                var locExpr = EffectiveLocationExpr("t");
+                var sql = $@"SELECT {locExpr} AS label,
                             SUM(TO_NUMBER(t.rtu_act DEFAULT 0 ON CONVERSION ERROR)) AS value
                        FROM rpt.asb_ts_actual t
                       WHERE t.sb = :sbName
                         AND t.horizon = :horizon{locClause}
                         AND t.loc IS NOT NULL
-                      GROUP BY t.loc";
+                                            GROUP BY {locExpr}";
 
         var totals = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         await using (var conn = _factory.Create())
