@@ -429,6 +429,9 @@ public class CostKeyController : ControllerBase
         var currentByKey = currentRows
             .GroupBy(row => (row.Fy, row.Loc, row.ServiceBundle, row.ClientCorridor, row.WbsElement))
             .ToDictionary(group => group.Key, group => group.First());
+        var currentByBusinessKey = currentRows
+            .GroupBy(row => (row.Loc, row.ServiceBundle, row.ClientCorridor, row.WbsElement))
+            .ToDictionary(group => group.Key, group => group.First());
 
         foreach (var pastHorizon in pastHorizons)
         {
@@ -440,12 +443,21 @@ public class CostKeyController : ControllerBase
             var pastByKey = pastRows
                 .GroupBy(row => (row.Fy, row.Loc, row.ServiceBundle, row.ClientCorridor, row.WbsElement))
                 .ToDictionary(group => group.Key, group => group.First());
+            var pastByBusinessKey = pastRows
+                .GroupBy(row => (row.Loc, row.ServiceBundle, row.ClientCorridor, row.WbsElement))
+                .ToDictionary(group => group.Key, group => group.First());
 
             foreach (var currentRow in currentByKey.Values)
             {
                 if (pastByKey.TryGetValue((currentRow.Fy, currentRow.Loc, currentRow.ServiceBundle, currentRow.ClientCorridor, currentRow.WbsElement), out var pastRow))
                 {
                     currentRow.HistoricalCosts[pastHorizon] = pastRow.CostKeur;
+                    continue;
+                }
+
+                if (pastByBusinessKey.TryGetValue((currentRow.Loc, currentRow.ServiceBundle, currentRow.ClientCorridor, currentRow.WbsElement), out var businessPastRow))
+                {
+                    currentRow.HistoricalCosts[pastHorizon] = businessPastRow.CostKeur;
                 }
                 else
                 {
