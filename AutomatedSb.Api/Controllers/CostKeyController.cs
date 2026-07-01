@@ -14,6 +14,8 @@ namespace AutomatedSb.Api.Controllers;
 [Route("api/cost-key")]
 public class CostKeyController : ControllerBase
 {
+    private const string HistoricalCutoffHorizon = "25-09";
+
     private readonly IOracleConnectionFactory _factory;
     private readonly IOracleRealisConnectionFactory _realisFactory;
     private readonly ILogger<CostKeyController> _logger;
@@ -143,12 +145,27 @@ public class CostKeyController : ControllerBase
         }
 
         var currentHorizon = horizons[selectedIndex].Name;
-        var pastHorizons = horizons
-            .Skip(selectedIndex + 1)
-            .Take(pastCount)
-            .Select(item => item.Name)
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .ToList();
+        var pastHorizons = new List<string>();
+        for (var index = selectedIndex + 1; index < horizons.Count; index++)
+        {
+            var pastHorizon = horizons[index].Name;
+            if (string.IsNullOrWhiteSpace(pastHorizon))
+            {
+                continue;
+            }
+
+            pastHorizons.Add(pastHorizon);
+            if (string.Equals(pastHorizon, HistoricalCutoffHorizon, StringComparison.OrdinalIgnoreCase))
+            {
+                break;
+            }
+
+            if (pastHorizons.Count >= pastCount)
+            {
+                // Keep the window focused on the latest historical horizons, but never go older than 25-09.
+                continue;
+            }
+        }
 
         return new HorizonWindow(currentHorizon, pastHorizons);
     }
