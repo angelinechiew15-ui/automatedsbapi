@@ -263,7 +263,9 @@ public class CostKeyController : ControllerBase
         {
             mappings.TryGetValue((Normalize(aggregate.Sb), Normalize(aggregate.Loc)), out var mappingRows);
             var effectiveMappings = mappingRows?
-                .Where(mapping => !string.IsNullOrWhiteSpace(mapping.ReceiverWbs))
+                .Where(mapping =>
+                    !string.IsNullOrWhiteSpace(mapping.ReceiverWbs)
+                    && mapping.CcPercent.HasValue)
                 .ToList();
 
             if (effectiveMappings == null || effectiveMappings.Count == 0)
