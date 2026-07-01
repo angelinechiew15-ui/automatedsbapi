@@ -496,10 +496,10 @@ public class ServiceBundleController : ControllerBase
                      AND {alias}.cm_matrix_adder_for = '{adderFor}'";
 
     // Cost-demand components per fiscal quarter:
-    //   rtu_rfc = (SUM(ts_demand) + SUM(adder_ts)) * SUM(effective RTU/TS) * 3
-    //             i.e. (TSpM RFC Demand w/o adder + TS adder) * RTU/TS * 3  ("RTU RFC demand")
+    //   rtu_rfc = ((SUM(ts_demand) + SUM(adder_ts)) * SUM(effective RTU/TS) * 3) + SUM(adder_rtu)
+    //             i.e. the full RTU demand shown in the table/chart.
     //   rfc_wo = rtu_rfc * SUM("COST/RTU") / 1000
-    //            i.e. (RTU RFC demand * cost/rtu) / 1000  ("Cost RFC w/o Depreciation")
+    //            i.e. (RTU demand * cost/rtu) / 1000  ("Cost RFC w/o Depreciation")
     //   depr   = SUM(depreciation)                            ("Cost RFC Depreciation")
     //   addc   = SUM(adder_cost)                              ("Adder Value Cost Demand")
     // All three are multiplied by 4 for FY-only rows (quarter IS NULL) to annualise.
@@ -514,14 +514,15 @@ public class ServiceBundleController : ControllerBase
                     FROM (
                       SELECT {labelExpr} AS label,
                              CASE WHEN t.quarter IS NULL THEN 0 ELSE 1 END AS isq,
-                                                         ((SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR))
+                                                         (((SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR))
                                                                  + SUM(NVL(TO_NUMBER(ats.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
                                                              * SUM({ChangeMappedRtuTsExpr()}) * 3)
+                                                             + SUM(NVL(TO_NUMBER(artu.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
                                                              * SUM({NumExpr(@"t.""COST/RTU""")}) / 1000 AS rfc_wo,
                              SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS depr,
                              SUM(NVL(TO_NUMBER(ac.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)) AS addc
                         FROM rpt.asb_ts_actual t
-{ChangeMappedJoin()}{AdderJoin("ats", "Adder", "TS")}{AdderJoin("ac", "Adder", "COST")}
+{ChangeMappedJoin()}{AdderJoin("ats", "Adder", "TS")}{AdderJoin("artu", "Adder", "RTU")}{AdderJoin("ac", "Adder", "COST")}
                        WHERE t.sb = :sbName AND t.horizon = :horizon{locClause}
                        GROUP BY {labelExpr}, CASE WHEN t.quarter IS NULL THEN 0 ELSE 1 END
                     )
@@ -616,14 +617,15 @@ public class ServiceBundleController : ControllerBase
                             SUM(TO_NUMBER(t.ts_actual DEFAULT 0 ON CONVERSION ERROR)) AS ts_actual,
                                                         ((SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR))
                                                                 + SUM(NVL(TO_NUMBER(ats.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
-                                                            * SUM({ChangeMappedRtuTsExpr()}) * 3) AS rtu_plan,
+                                                            * SUM({ChangeMappedRtuTsExpr()}) * 3
+                                                            + SUM(NVL(TO_NUMBER(artu.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0))) AS rtu_plan,
                             SUM(TO_NUMBER(t.rtu_act   DEFAULT 0 ON CONVERSION ERROR)) AS rtu_act,
                             SUM(TO_NUMBER(t.cost_act  DEFAULT 0 ON CONVERSION ERROR)) AS cost_act,
                             SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS depr,
                             SUM({ChangeMappedRtuTsExpr()}) AS rtu_ts,
                             SUM({NumExpr(@"t.""COST/RTU""")}) AS cost_rtu
                        FROM rpt.asb_ts_actual t
-{ChangeMappedJoin()}{AdderJoin("ats", "Adder", "TS")}
+{ChangeMappedJoin()}{AdderJoin("ats", "Adder", "TS")}{AdderJoin("artu", "Adder", "RTU")}
                       WHERE t.sb = :sbName AND t.horizon = :horizon AND (t.loc = :loc OR t.loc LIKE :loc || ' %')
                       GROUP BY {labelExpr}
                       ORDER BY {labelExpr} ASC";
