@@ -52,8 +52,8 @@ public class LabSummaryController : ControllerBase
                                              t.horizon,
                                              t.sb,
                                              CAST(CASE
-                                                             WHEN cm_change.cm_matrix_change_mappedvalue IS NOT NULL
-                                                                     THEN TO_NUMBER(cm_change.cm_matrix_change_mappedvalue DEFAULT 0 ON CONVERSION ERROR)
+                                                                 WHEN cm_change.cm_matrix_change_value IS NOT NULL
+                                                                     THEN TO_NUMBER(cm_change.cm_matrix_change_value DEFAULT 0 ON CONVERSION ERROR)
                                                        ELSE {NumExpr(@"t.""RTU/TS""")}
                                                         END AS BINARY_DOUBLE) AS rtu_ts_value,
                                              t.ts_demand,
