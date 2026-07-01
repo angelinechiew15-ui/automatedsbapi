@@ -9,18 +9,65 @@ namespace AutomatedSb.Api.Controllers;
 public class WorkshopSummaryController : ControllerBase
 {
     private readonly IOracleConnectionFactory _factory;
+    private readonly IOracleRealisConnectionFactory _realisFactory;
     private readonly ILogger<WorkshopSummaryController> _logger;
 
     public WorkshopSummaryController(
         IOracleConnectionFactory factory,
+        IOracleRealisConnectionFactory realisFactory,
         ILogger<WorkshopSummaryController> logger)
     {
         _factory = factory;
+        _realisFactory = realisFactory;
         _logger = logger;
     }
 
     private static string NumExpr(string expr) =>
         $"TO_NUMBER({expr} DEFAULT 0 ON CONVERSION ERROR)";
+
+    private sealed record HorizonContext(int ApprovalHorizonId, string HorizonText);
+
+    private async Task<HorizonContext?> ResolveHorizonContextAsync(string horizon)
+    {
+        const string byIdSql = @"
+            SELECT rhz_id, rhz_name
+              FROM rfc_horizon
+             WHERE rhz_id = :horizonId";
+
+        const string byNameSql = @"
+            SELECT rhz_id, rhz_name
+              FROM rfc_horizon
+             WHERE rhz_name = :horizonName";
+
+        await using var conn = _realisFactory.Create();
+        await conn.OpenAsync();
+
+        await using var cmd = new OracleCommand(int.TryParse(horizon, out _)
+            ? byIdSql
+            : byNameSql, conn)
+        {
+            BindByName = true,
+        };
+
+        if (int.TryParse(horizon, out var horizonId))
+        {
+            cmd.Parameters.Add(new OracleParameter("horizonId", OracleDbType.Int32) { Value = horizonId });
+        }
+        else
+        {
+            cmd.Parameters.Add(new OracleParameter("horizonName", OracleDbType.Varchar2) { Value = horizon });
+        }
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            return null;
+        }
+
+        return new HorizonContext(
+            Convert.ToInt32(reader["rhz_id"]),
+            reader["rhz_name"]?.ToString() ?? horizon);
+    }
 
     // GET api/workshop-summary
     [HttpGet]
@@ -93,8 +140,14 @@ public class WorkshopSummaryController : ControllerBase
         if (string.IsNullOrWhiteSpace(horizon))
             return BadRequest(new { success = false, message = "horizon is required" });
 
-        // Main query: approval status + comments from cm_matrix_sb_ws_sum
-        // Then aggregate demand values from v_sb_asb_data for the same horizon.
+        var horizonContext = await ResolveHorizonContextAsync(horizon);
+        if (horizonContext is null)
+        {
+            return BadRequest(new { success = false, message = $"Unknown horizon '{horizon}'" });
+        }
+
+        // Approval rows are keyed by horizon ID, while the demand view uses the
+        // horizon display string. Resolve both upfront so the two sources stay aligned.
         var sql = $@"
             SELECT
                 d.cm_matrix_sb_div_name                           AS div_name,
@@ -114,6 +167,7 @@ public class WorkshopSummaryController : ControllerBase
                 LEFT JOIN (
                     SELECT cm_matrix_sb_approval_sb_id, cm_matrix_sb_approval_sb_status
                     FROM cm_matrix_sb_approval
+                     WHERE cm_matrix_sb_approval_horizon_id = :approvalHorizonId
                 ) hh ON hh.cm_matrix_sb_approval_sb_id = s.cm_matrix_sb_id
                 LEFT JOIN cm_matrix_sb_ws_sum ss
                     ON ss.cm_matrix_sb_ws_sb_id = s.cm_matrix_sb_id
@@ -157,7 +211,7 @@ public class WorkshopSummaryController : ControllerBase
                      AND t.horizon = a_cost.cm_matrix_adder_horizon
                      AND a_cost.cm_matrix_adder_type = 'Adder'
                      AND a_cost.cm_matrix_adder_for  = 'COST'
-                    WHERE t.horizon = :horizon
+                    WHERE t.horizon = :horizonText
                     GROUP BY t.sb, t.fy
                 ) m
                     ON m.sb = s.cm_matrix_sb_name
@@ -184,7 +238,8 @@ public class WorkshopSummaryController : ControllerBase
             await using var conn = _factory.Create();
             await conn.OpenWithNlsAsync();
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
-            cmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = horizon });
+            cmd.Parameters.Add(new OracleParameter("approvalHorizonId", OracleDbType.Int32) { Value = horizonContext.ApprovalHorizonId });
+            cmd.Parameters.Add(new OracleParameter("horizonText", OracleDbType.Varchar2) { Value = horizonContext.HorizonText });
 
             await using var reader = await cmd.ExecuteReaderAsync();
 
