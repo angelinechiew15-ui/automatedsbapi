@@ -194,6 +194,16 @@ public class WorkshopSummaryController : ControllerBase
             var result = new List<object>();
             while (await reader.ReadAsync())
             {
+                static double ValueOrZero(object raw)
+                {
+                    if (raw == DBNull.Value || raw == null)
+                    {
+                        return 0d;
+                    }
+
+                    return Convert.ToDouble(raw);
+                }
+
                 result.Add(new
                 {
                     divName    = reader["div_name"]?.ToString()    ?? "",
@@ -203,9 +213,9 @@ public class WorkshopSummaryController : ControllerBase
                     comment    = reader["sb_comment"]?.ToString()  ?? "",
                     summary    = reader["div_summary"]?.ToString() ?? "",
                     fy         = reader["fy"]?.ToString()          ?? "",
-                    tsDemand   = Dbl(reader["ts_demand"]),
-                    rtuDemand  = Dbl(reader["rtu_demand"]),
-                    costDemand = Dbl(reader["cost_demand"]),
+                    tsDemand   = ValueOrZero(reader["ts_demand"]),
+                    rtuDemand  = ValueOrZero(reader["rtu_demand"]),
+                    costDemand = ValueOrZero(reader["cost_demand"]),
                 });
             }
 
