@@ -15,13 +15,16 @@ namespace AutomatedSb.Api.Controllers;
 public class CostKeyController : ControllerBase
 {
     private readonly IOracleConnectionFactory _factory;
+    private readonly IOracleRealisConnectionFactory _realisFactory;
     private readonly ILogger<CostKeyController> _logger;
 
     public CostKeyController(
         IOracleConnectionFactory factory,
+        IOracleRealisConnectionFactory realisFactory,
         ILogger<CostKeyController> logger)
     {
         _factory = factory;
+        _realisFactory = realisFactory;
         _logger = logger;
     }
 
@@ -105,7 +108,7 @@ public class CostKeyController : ControllerBase
               FROM rfc_horizon
              ORDER BY rhz_id DESC";
 
-        await using var conn = _factory.Create();
+        await using var conn = _realisFactory.Create();
         await conn.OpenWithNlsAsync();
         await using var cmd = new OracleCommand(sql, conn);
         await using var reader = await cmd.ExecuteReaderAsync();
