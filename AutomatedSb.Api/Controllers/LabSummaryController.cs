@@ -48,6 +48,7 @@ public class LabSummaryController : ControllerBase
                         WITH base AS (
                                 SELECT CASE WHEN t.quarter IS NULL THEN t.fy
                                                         ELSE t.fy || ' ' || t.quarter END AS fy_quarter,
+                                             t.fy AS fy,
                                              t.loc AS location,
                                              t.horizon,
                                              t.sb,
