@@ -21,6 +21,19 @@ public class ServiceBundleController : ControllerBase
     private static string NumExpr(string expr) =>
         $"TO_NUMBER({expr} DEFAULT 0 ON CONVERSION ERROR)";
 
+    private static string ChangeMappedRtuTsExpr(string baseAlias = "t", string changeAlias = "cm_change")
+    {
+        var rawExpr = NumExpr($"{baseAlias}.\"RTU/TS\"");
+        return $"CAST(CASE WHEN {changeAlias}.cm_matrix_change_value IS NOT NULL THEN TO_NUMBER({changeAlias}.cm_matrix_change_value DEFAULT 0 ON CONVERSION ERROR) ELSE {rawExpr} END AS BINARY_DOUBLE)";
+    }
+
+    private static string ChangeMappedJoin(string baseAlias = "t", string changeAlias = "cm_change") => $@"
+                    LEFT JOIN rpt.cm_matrix_sb_change_mappedvalue {changeAlias}
+                      ON {baseAlias}.sb = {changeAlias}.cm_matrix_change_sb_name
+                     AND {baseAlias}.loc = {changeAlias}.cm_matrix_change_location
+                     AND {baseAlias}.horizon = {changeAlias}.cm_matrix_change_horizon
+                     AND {baseAlias}.fy = {changeAlias}.cm_matrix_change_fy";
+
     public ServiceBundleController(
         IOracleConnectionFactory factory,
         IOracleRealisConnectionFactory realisFactory,
@@ -433,9 +446,24 @@ public class ServiceBundleController : ControllerBase
     private Task<List<object>> QueryTsActualAsync(string sbName, string horizon, string? loc)
         => RunSeriesAsync(_factory.Create, SeriesSql("t.ts_actual", "TS", "Change", loc), sbName, horizon, loc);
 
-    // Test effort (RTU): demand (RTU_PLAN + Adder RTU) and actual (RTU_ACT + Change RTU).
-    private Task<List<object>> QueryRtuDemandAsync(string sbName, string horizon, string? loc)
-        => RunSeriesAsync(_factory.Create, SeriesSql("t.rtu_plan", "RTU", "Adder", loc), sbName, horizon, loc);
+        // Test effort (RTU): demand is recomputed from TS demand and the effective
+        // RTU/TS value (raw unless a mapped override exists) plus the RTU adder.
+        private async Task<List<object>> QueryRtuDemandAsync(string sbName, string horizon, string? loc)
+        {
+                var locClause = string.IsNullOrWhiteSpace(loc) ? "" : " AND (t.loc = :loc OR t.loc LIKE :loc || ' %')";
+                var sql = $@"SELECT CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END AS label,
+                                                        SUM(((TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR)
+                                                                 + NVL(TO_NUMBER(a_ts.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0))
+                                                                * {ChangeMappedRtuTsExpr()} * 3)
+                                                                + NVL(TO_NUMBER(a_rtu.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)) AS value
+                                             FROM rpt.asb_ts_actual t
+{ChangeMappedJoin()}{AdderJoin("a_ts", "Adder", "TS")}{AdderJoin("a_rtu", "Adder", "RTU")}
+                                            WHERE t.sb = :sbName
+                                                AND t.horizon = :horizon{locClause}
+                                            GROUP BY CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END
+                                            ORDER BY CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END ASC";
+                return await RunSeriesAsync(_factory.Create, sql, sbName, horizon, loc);
+        }
 
     private Task<List<object>> QueryRtuActualAsync(string sbName, string horizon, string? loc)
         => RunSeriesAsync(_factory.Create, SeriesSql("t.rtu_act", "RTU", "Change", loc), sbName, horizon, loc);
@@ -468,7 +496,7 @@ public class ServiceBundleController : ControllerBase
                      AND {alias}.cm_matrix_adder_for = '{adderFor}'";
 
     // Cost-demand components per fiscal quarter:
-    //   rtu_rfc = (SUM(ts_demand) + SUM(adder_ts)) * SUM("RTU/TS") * 3
+    //   rtu_rfc = (SUM(ts_demand) + SUM(adder_ts)) * SUM(effective RTU/TS) * 3
     //             i.e. (TSpM RFC Demand w/o adder + TS adder) * RTU/TS * 3  ("RTU RFC demand")
     //   rfc_wo = rtu_rfc * SUM("COST/RTU") / 1000
     //            i.e. (RTU RFC demand * cost/rtu) / 1000  ("Cost RFC w/o Depreciation")
@@ -488,11 +516,12 @@ public class ServiceBundleController : ControllerBase
                              CASE WHEN t.quarter IS NULL THEN 0 ELSE 1 END AS isq,
                                                          ((SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR))
                                                                  + SUM(NVL(TO_NUMBER(ats.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
-                                                             * SUM({NumExpr(@"t.""RTU/TS""")}) * 3)
+                                                             * SUM({ChangeMappedRtuTsExpr()}) * 3)
                                                              * SUM({NumExpr(@"t.""COST/RTU""")}) / 1000 AS rfc_wo,
                              SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS depr,
                              SUM(NVL(TO_NUMBER(ac.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)) AS addc
-                        FROM rpt.asb_ts_actual t{AdderJoin("ats", "Adder", "TS")}{AdderJoin("ac", "Adder", "COST")}
+                        FROM rpt.asb_ts_actual t
+{ChangeMappedJoin()}{AdderJoin("ats", "Adder", "TS")}{AdderJoin("ac", "Adder", "COST")}
                        WHERE t.sb = :sbName AND t.horizon = :horizon{locClause}
                        GROUP BY {labelExpr}, CASE WHEN t.quarter IS NULL THEN 0 ELSE 1 END
                     )
@@ -587,13 +616,14 @@ public class ServiceBundleController : ControllerBase
                             SUM(TO_NUMBER(t.ts_actual DEFAULT 0 ON CONVERSION ERROR)) AS ts_actual,
                                                         ((SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR))
                                                                 + SUM(NVL(TO_NUMBER(ats.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
-                                                            * CAST(SUM({NumExpr(@"t.""RTU/TS""")}) AS BINARY_DOUBLE) * 3) AS rtu_plan,
+                                                            * SUM({ChangeMappedRtuTsExpr()}) * 3) AS rtu_plan,
                             SUM(TO_NUMBER(t.rtu_act   DEFAULT 0 ON CONVERSION ERROR)) AS rtu_act,
                             SUM(TO_NUMBER(t.cost_act  DEFAULT 0 ON CONVERSION ERROR)) AS cost_act,
                             SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS depr,
-                            SUM({NumExpr(@"t.""RTU/TS""")}) AS rtu_ts,
+                            SUM({ChangeMappedRtuTsExpr()}) AS rtu_ts,
                             SUM({NumExpr(@"t.""COST/RTU""")}) AS cost_rtu
-                       FROM rpt.asb_ts_actual t{AdderJoin("ats", "Adder", "TS")}
+                       FROM rpt.asb_ts_actual t
+{ChangeMappedJoin()}{AdderJoin("ats", "Adder", "TS")}
                       WHERE t.sb = :sbName AND t.horizon = :horizon AND (t.loc = :loc OR t.loc LIKE :loc || ' %')
                       GROUP BY {labelExpr}
                       ORDER BY {labelExpr} ASC";
