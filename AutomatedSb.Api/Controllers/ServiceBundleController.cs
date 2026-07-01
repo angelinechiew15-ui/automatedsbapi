@@ -34,16 +34,16 @@ public class ServiceBundleController : ControllerBase
                      AND {baseAlias}.horizon = {changeAlias}.cm_matrix_change_horizon
                      AND {baseAlias}.fy = {changeAlias}.cm_matrix_change_fy";
 
-    private static string EffectiveLocationExpr(string alias = "t") => $@"
+        private static string EffectiveLocationExpr(string alias = "t", string mapAlias = "m_ext") => $@"
         CASE
             WHEN {alias}.loc LIKE 'RPT %' OR {alias}.loc LIKE 'ASE %' THEN {alias}.loc
-            ELSE NVL((
-                SELECT MAX(m.cm_matrix_sb_ext_mapping_rpt_loc)
-                  FROM rpt.cm_matrix_sb_ext_mapping m
-                 WHERE m.cm_matrix_sb_ext_mapping_ext_loc = {alias}.loc
-                   AND (m.cm_matrix_sb_ext_for_ts = 'Y' OR m.cm_matrix_sb_ext_for_rtu = 'Y')
-            ), {alias}.loc)
+                        ELSE NVL({mapAlias}.cm_matrix_sb_ext_mapping_rpt_loc, {alias}.loc)
         END";
+
+        private static string ExtLocationJoin(string alias = "t", string mapAlias = "m_ext") => $@"
+                                        LEFT JOIN rpt.cm_matrix_sb_ext_mapping {mapAlias}
+                                            ON {alias}.loc = {mapAlias}.cm_matrix_sb_ext_mapping_ext_loc
+                                         AND ({mapAlias}.cm_matrix_sb_ext_for_ts = 'Y' OR {mapAlias}.cm_matrix_sb_ext_for_rtu = 'Y')";
 
     private static string LocationClause(string? loc, string alias = "t")
     {
@@ -290,12 +290,13 @@ public class ServiceBundleController : ControllerBase
         string sbName, string horizon, IReadOnlyList<string> labRoots)
     {
         // One pass: per-loc sums of the actual measures for this SB + horizon.
-        var locExpr = EffectiveLocationExpr("t");
+        var locExpr = EffectiveLocationExpr("t", "m_ext");
         var sql = $@"SELECT {locExpr} AS loc,
                            SUM(TO_NUMBER(t.ts_actual DEFAULT 0 ON CONVERSION ERROR)) AS tsa,
                            SUM(TO_NUMBER(t.rtu_act   DEFAULT 0 ON CONVERSION ERROR)) AS rtua,
                            SUM(TO_NUMBER(t.cost_act  DEFAULT 0 ON CONVERSION ERROR)) AS costa
                       FROM rpt.asb_ts_actual t
+    {ExtLocationJoin("t", "m_ext")}
                      WHERE t.sb = :sbName AND t.horizon = :horizon AND t.loc IS NOT NULL
                      GROUP BY {locExpr}";
 
@@ -763,10 +764,11 @@ public class ServiceBundleController : ControllerBase
 
         // 4. sum RTU per location from the actuals.
         var locClause = LocationClause(loc);
-                var locExpr = EffectiveLocationExpr("t");
+                var locExpr = EffectiveLocationExpr("t", "m_ext");
                 var sql = $@"SELECT {locExpr} AS label,
                             SUM(TO_NUMBER(t.rtu_act DEFAULT 0 ON CONVERSION ERROR)) AS value
                        FROM rpt.asb_ts_actual t
+            {ExtLocationJoin("t", "m_ext")}
                       WHERE t.sb = :sbName
                         AND t.horizon = :horizon{locClause}
                         AND t.loc IS NOT NULL
