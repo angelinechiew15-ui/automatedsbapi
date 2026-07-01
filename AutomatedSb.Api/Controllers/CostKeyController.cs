@@ -409,9 +409,9 @@ public class CostKeyController : ControllerBase
         IReadOnlyDictionary<string, List<CostKeyOverviewRow>> overviewByHorizon,
         IReadOnlyList<string> pastHorizons)
     {
-        var currentByKey = currentRows.ToDictionary(
-            row => (row.Fy, row.Loc, row.ServiceBundle, row.ClientCorridor, row.WbsElement),
-            row => row);
+        var currentByKey = currentRows
+            .GroupBy(row => (row.Fy, row.Loc, row.ServiceBundle, row.ClientCorridor, row.WbsElement))
+            .ToDictionary(group => group.Key, group => group.First());
 
         foreach (var pastHorizon in pastHorizons)
         {
@@ -420,9 +420,9 @@ public class CostKeyController : ControllerBase
                 continue;
             }
 
-            var pastByKey = pastRows.ToDictionary(
-                row => (row.Fy, row.Loc, row.ServiceBundle, row.ClientCorridor, row.WbsElement),
-                row => row);
+            var pastByKey = pastRows
+                .GroupBy(row => (row.Fy, row.Loc, row.ServiceBundle, row.ClientCorridor, row.WbsElement))
+                .ToDictionary(group => group.Key, group => group.First());
 
             foreach (var currentRow in currentByKey.Values)
             {
