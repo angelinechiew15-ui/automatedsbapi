@@ -37,7 +37,7 @@ public class LabSummaryController : ControllerBase
         // Adder JOIN helper — reused 5 times for TS Adder, TS Change, RTU Adder, RTU Change, COST Adder
         static string AdderJoin(string baseAlias, string alias, string type, string forMeasure) => $@"
               LEFT JOIN rpt.cm_matrix_sb_adder {alias}
-            ON {baseAlias}.loc     = {alias}.cm_matrix_adder_location
+                        ON {baseAlias}.location = {alias}.cm_matrix_adder_location
                AND {baseAlias}.sb      = {alias}.cm_matrix_adder_sb_name
                              AND {baseAlias}.fy_quarter_key = {alias}.cm_matrix_adder_fy || '-' || {alias}.cm_matrix_adder_quarter
                AND {baseAlias}.horizon = {alias}.cm_matrix_adder_horizon
