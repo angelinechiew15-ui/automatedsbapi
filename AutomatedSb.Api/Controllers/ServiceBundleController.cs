@@ -34,6 +34,23 @@ public class ServiceBundleController : ControllerBase
                      AND {baseAlias}.horizon = {changeAlias}.cm_matrix_change_horizon
                      AND {baseAlias}.fy = {changeAlias}.cm_matrix_change_fy";
 
+    private static string LocationClause(string? loc, string alias = "t")
+    {
+        if (string.IsNullOrWhiteSpace(loc))
+        {
+            return "";
+        }
+
+        var normalized = loc.Trim();
+        if (normalized.Equals("RPT MUC ESD", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("RPT MUC ETC", StringComparison.OrdinalIgnoreCase))
+        {
+            return $" AND {alias}.loc = :loc";
+        }
+
+        return $" AND ({alias}.loc = :loc OR {alias}.loc LIKE :loc || ' %')";
+    }
+
     public ServiceBundleController(
         IOracleConnectionFactory factory,
         IOracleRealisConnectionFactory realisFactory,
@@ -421,7 +438,7 @@ public class ServiceBundleController : ControllerBase
     // reason we query the base table here instead of the view (which casts unsafely).
     private static string SeriesSql(string baseMeasure, string adderFor, string adderType, string? loc)
     {
-        var locClause = string.IsNullOrWhiteSpace(loc) ? "" : " AND (t.loc = :loc OR t.loc LIKE :loc || ' %')";
+        var locClause = LocationClause(loc);
         return $@"SELECT CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END AS label,
                          SUM(TO_NUMBER({baseMeasure} DEFAULT 0 ON CONVERSION ERROR)
                              + NVL(TO_NUMBER(a.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)) AS value
@@ -450,7 +467,7 @@ public class ServiceBundleController : ControllerBase
         // RTU/TS value (raw unless a mapped override exists) plus the RTU adder.
         private async Task<List<object>> QueryRtuDemandAsync(string sbName, string horizon, string? loc)
         {
-                var locClause = string.IsNullOrWhiteSpace(loc) ? "" : " AND (t.loc = :loc OR t.loc LIKE :loc || ' %')";
+                    var locClause = LocationClause(loc);
                 var sql = $@"SELECT CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END AS label,
                                                         SUM(((TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR)
                                                                  + NVL(TO_NUMBER(a_ts.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0))
@@ -504,7 +521,7 @@ public class ServiceBundleController : ControllerBase
         //   addc   = SUM(adder_cost)                              ("Adder Value Cost Demand")
     private static string CostDemandComponentsSql(string? loc)
     {
-        var locClause = string.IsNullOrWhiteSpace(loc) ? "" : " AND (t.loc = :loc OR t.loc LIKE :loc || ' %')";
+        var locClause = LocationClause(loc);
         const string labelExpr = "CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END";
         return $@"SELECT label,
                                                  CAST(rfc_wo AS BINARY_DOUBLE) AS rfc_wo,
@@ -610,6 +627,7 @@ public class ServiceBundleController : ControllerBase
     private async Task<List<BaseRow>> QueryBaseSumsAsync(string sbName, string horizon, string loc)
     {
         const string labelExpr = "CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END";
+        var locClause = LocationClause(loc);
         var sql = $@"SELECT {labelExpr} AS label,
                             SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR)) AS ts_demand,
                             SUM(TO_NUMBER(t.ts_actual DEFAULT 0 ON CONVERSION ERROR)) AS ts_actual,
@@ -624,7 +642,7 @@ public class ServiceBundleController : ControllerBase
                             SUM({NumExpr(@"t.""COST/RTU""")}) AS cost_rtu
                        FROM rpt.asb_ts_actual t
 {ChangeMappedJoin()}{AdderJoin("ats", "Adder", "TS")}{AdderJoin("artu", "Adder", "RTU")}
-                      WHERE t.sb = :sbName AND t.horizon = :horizon AND (t.loc = :loc OR t.loc LIKE :loc || ' %')
+                      WHERE t.sb = :sbName AND t.horizon = :horizon{locClause}
                       GROUP BY {labelExpr}
                       ORDER BY {labelExpr} ASC";
 
@@ -732,7 +750,7 @@ public class ServiceBundleController : ControllerBase
         }
 
         // 4. sum RTU per location from the actuals.
-        var locClause = string.IsNullOrWhiteSpace(loc) ? "" : " AND (t.loc = :loc OR t.loc LIKE :loc || ' %')";
+        var locClause = LocationClause(loc);
         var sql = $@"SELECT t.loc AS label,
                             SUM(TO_NUMBER(t.rtu_act DEFAULT 0 ON CONVERSION ERROR)) AS value
                        FROM rpt.asb_ts_actual t
