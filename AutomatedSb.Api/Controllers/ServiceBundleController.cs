@@ -43,7 +43,8 @@ public class ServiceBundleController : ControllerBase
 
         var normalized = loc.Trim();
         if (normalized.Equals("RPT MUC ESD", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Equals("RPT MUC ETC", StringComparison.OrdinalIgnoreCase))
+            normalized.Equals("RPT MUC ETC", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("RPT VI", StringComparison.OrdinalIgnoreCase))
         {
             return $" AND {alias}.loc = :loc";
         }
