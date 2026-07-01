@@ -36,13 +36,13 @@ public class ServiceBundleController : ControllerBase
 
         private static string EffectiveLocationExpr(string alias = "t", string mapAlias = "m_ext") => $@"
         CASE
-            WHEN {alias}.loc LIKE 'RPT %' OR {alias}.loc LIKE 'ASE %' THEN {alias}.loc
-                        ELSE NVL({mapAlias}.cm_matrix_sb_ext_mapping_rpt_loc, {alias}.loc)
+                WHEN TO_CHAR({alias}.loc) LIKE 'RPT %' OR TO_CHAR({alias}.loc) LIKE 'ASE %' THEN TO_CHAR({alias}.loc)
+                ELSE NVL(TO_CHAR({mapAlias}.cm_matrix_sb_ext_mapping_rpt_loc), TO_CHAR({alias}.loc))
         END";
 
         private static string ExtLocationJoin(string alias = "t", string mapAlias = "m_ext") => $@"
                                         LEFT JOIN rpt.cm_matrix_sb_ext_mapping {mapAlias}
-                                            ON {alias}.loc = {mapAlias}.cm_matrix_sb_ext_mapping_ext_loc
+                          ON TO_CHAR({alias}.loc) = TO_CHAR({mapAlias}.cm_matrix_sb_ext_mapping_ext_loc)
                                          AND ({mapAlias}.cm_matrix_sb_ext_for_ts = 'Y' OR {mapAlias}.cm_matrix_sb_ext_for_rtu = 'Y')";
 
     private static string LocationClause(string? loc, string alias = "t")
@@ -57,10 +57,10 @@ public class ServiceBundleController : ControllerBase
             normalized.Equals("RPT MUC ETC", StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals("RPT VI", StringComparison.OrdinalIgnoreCase))
         {
-            return $" AND ({alias}.loc = :loc OR EXISTS (SELECT 1 FROM rpt.cm_matrix_sb_ext_mapping m WHERE m.cm_matrix_sb_ext_mapping_ext_loc = {alias}.loc AND m.cm_matrix_sb_ext_mapping_rpt_loc = :loc AND (m.cm_matrix_sb_ext_for_ts = 'Y' OR m.cm_matrix_sb_ext_for_rtu = 'Y')))";
+            return $" AND (TO_CHAR({alias}.loc) = :loc OR EXISTS (SELECT 1 FROM rpt.cm_matrix_sb_ext_mapping m WHERE TO_CHAR(m.cm_matrix_sb_ext_mapping_ext_loc) = TO_CHAR({alias}.loc) AND TO_CHAR(m.cm_matrix_sb_ext_mapping_rpt_loc) = :loc AND (m.cm_matrix_sb_ext_for_ts = 'Y' OR m.cm_matrix_sb_ext_for_rtu = 'Y')))";
         }
 
-        return $" AND ({alias}.loc = :loc OR {alias}.loc LIKE :loc || ' %' OR EXISTS (SELECT 1 FROM rpt.cm_matrix_sb_ext_mapping m WHERE m.cm_matrix_sb_ext_mapping_ext_loc = {alias}.loc AND m.cm_matrix_sb_ext_mapping_rpt_loc = :loc AND (m.cm_matrix_sb_ext_for_ts = 'Y' OR m.cm_matrix_sb_ext_for_rtu = 'Y')))";
+        return $" AND (TO_CHAR({alias}.loc) = :loc OR TO_CHAR({alias}.loc) LIKE :loc || ' %' OR EXISTS (SELECT 1 FROM rpt.cm_matrix_sb_ext_mapping m WHERE TO_CHAR(m.cm_matrix_sb_ext_mapping_ext_loc) = TO_CHAR({alias}.loc) AND TO_CHAR(m.cm_matrix_sb_ext_mapping_rpt_loc) = :loc AND (m.cm_matrix_sb_ext_for_ts = 'Y' OR m.cm_matrix_sb_ext_for_rtu = 'Y')))";
     }
 
     public ServiceBundleController(
