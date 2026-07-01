@@ -537,25 +537,34 @@ public class ServiceBundleController : ControllerBase
     {
         var locClause = LocationClause(loc);
         const string labelExpr = "CASE WHEN t.quarter IS NULL THEN t.fy ELSE t.fy || ' ' || t.quarter END";
+                var locExpr = EffectiveLocationExpr("t", "m_ext");
         return $@"SELECT label,
                                                  CAST(rfc_wo AS BINARY_DOUBLE) AS rfc_wo,
                                                  CAST(depr   AS BINARY_DOUBLE) AS depr,
                                                  CAST(addc   AS BINARY_DOUBLE) AS addc
                     FROM (
-                      SELECT {labelExpr} AS label,
-                                                         (((SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR))
-                                                                 + SUM(NVL(TO_NUMBER(ats.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
-                                                             * SUM({ChangeMappedRtuTsExpr()}) * 3)
-                                                             + SUM(NVL(TO_NUMBER(artu.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
-                                                             * SUM({NumExpr(@"t.""COST/RTU""")}) / 1000 AS rfc_wo,
-                             SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS depr,
-                             SUM(NVL(TO_NUMBER(ac.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)) AS addc
-                        FROM rpt.asb_ts_actual t
-{ChangeMappedJoin()}{AdderJoin("ats", "Adder", "TS")}{AdderJoin("artu", "Adder", "RTU")}{AdderJoin("ac", "Adder", "COST")}
-                                             WHERE t.sb = :sbName AND t.horizon = :horizon{locClause}
-                                             GROUP BY {labelExpr}
-                    )
-                   ORDER BY label ASC";
+                                            SELECT label,
+                                                         SUM(rfc_wo) AS rfc_wo,
+                                                         SUM(depr)   AS depr,
+                                                         SUM(addc)   AS addc
+                                                FROM (
+                                                    SELECT {labelExpr} AS label,
+                                                                 {locExpr} AS eff_loc,
+                                                                 (((SUM(TO_NUMBER(t.ts_demand DEFAULT 0 ON CONVERSION ERROR))
+                                                                                 + SUM(NVL(TO_NUMBER(ats.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
+                                                                         * SUM({ChangeMappedRtuTsExpr()}) * 3)
+                                                                         + SUM(NVL(TO_NUMBER(artu.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)))
+                                                                         * SUM({NumExpr(@"t.""COST/RTU""")}) / 1000 AS rfc_wo,
+                                                                 SUM(TO_NUMBER(t.depreciation DEFAULT 0 ON CONVERSION ERROR)) AS depr,
+                                                                 SUM(NVL(TO_NUMBER(ac.cm_matrix_adder_value DEFAULT 0 ON CONVERSION ERROR), 0)) AS addc
+                                                        FROM rpt.asb_ts_actual t
+{ExtLocationJoin("t", "m_ext")}{ChangeMappedJoin()}{AdderJoin("ats", "Adder", "TS")}{AdderJoin("artu", "Adder", "RTU")}{AdderJoin("ac", "Adder", "COST")}
+                                                                                                 WHERE t.sb = :sbName AND t.horizon = :horizon{locClause}
+                                                                                                 GROUP BY {labelExpr}, {locExpr}
+                                                )
+                                             GROUP BY label
+                                        )
+                                     ORDER BY label ASC";
     }
 
     private async Task<List<CostDemandRow>> QueryCostDemandComponentsAsync(string sbName, string horizon, string? loc)
