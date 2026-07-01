@@ -114,9 +114,6 @@ public class WorkshopSummaryController : ControllerBase
                 LEFT JOIN (
                     SELECT cm_matrix_sb_approval_sb_id, cm_matrix_sb_approval_sb_status
                     FROM cm_matrix_sb_approval
-                    WHERE cm_matrix_sb_approval_horizon_id = (
-                        SELECT MAX(cm_matrix_sb_approval_horizon_id) FROM cm_matrix_sb_approval
-                    )
                 ) hh ON hh.cm_matrix_sb_approval_sb_id = s.cm_matrix_sb_id
                 LEFT JOIN cm_matrix_sb_ws_sum ss
                     ON ss.cm_matrix_sb_ws_sb_id = s.cm_matrix_sb_id
