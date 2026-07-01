@@ -39,7 +39,7 @@ public class LabSummaryController : ControllerBase
               LEFT JOIN rpt.cm_matrix_sb_adder {alias}
             ON {baseAlias}.loc     = {alias}.cm_matrix_adder_location
                AND {baseAlias}.sb      = {alias}.cm_matrix_adder_sb_name
-               AND {baseAlias}.fy || '-' || {baseAlias}.quarter = {alias}.cm_matrix_adder_fy || '-' || {alias}.cm_matrix_adder_quarter
+                             AND {baseAlias}.fy || '-' || {baseAlias}.qtr = {alias}.cm_matrix_adder_fy || '-' || {alias}.cm_matrix_adder_quarter
                AND {baseAlias}.horizon = {alias}.cm_matrix_adder_horizon
                AND {alias}.cm_matrix_adder_type = '{type}'
                AND {alias}.cm_matrix_adder_for  = '{forMeasure}'";
@@ -51,7 +51,7 @@ public class LabSummaryController : ControllerBase
                                              t.loc AS location,
                                              t.horizon,
                                              t.sb,
-                                                   t.quarter,
+                                               t.quarter AS qtr,
                                              CAST(CASE
                                                                  WHEN cm_change.cm_matrix_change_value IS NOT NULL
                                                                      THEN TO_NUMBER(cm_change.cm_matrix_change_value DEFAULT 0 ON CONVERSION ERROR)
