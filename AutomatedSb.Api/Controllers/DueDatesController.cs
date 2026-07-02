@@ -27,7 +27,7 @@ public class DueDatesController : ControllerBase
         {
             await using var conn = _factory.Create();
             await conn.OpenWithNlsAsync();
-            const string sql = @"SELECT cm_matrix_sb_duedate_duedate FROM cm_matrix_sb_duedate WHERE cm_matrix_sb_duedate_horizon = :horizon";
+            const string sql = @"SELECT cm_matrix_sb_dd_duedate FROM cm_matrix_sb_duedate WHERE CM_MATRIX_SB_DD_HORIZON = :horizon";
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
             cmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = horizon });
             var scalar = await cmd.ExecuteScalarAsync();
@@ -70,7 +70,7 @@ public class DueDatesController : ControllerBase
             await using var conn = _factory.Create();
             await conn.OpenWithNlsAsync();
 
-            const string existsSql = @"SELECT 1 FROM cm_matrix_sb_duedate WHERE cm_matrix_sb_duedate_horizon = :horizon";
+            const string existsSql = @"SELECT 1 FROM cm_matrix_sb_duedate WHERE CM_MATRIX_SB_DD_HORIZON = :horizon";
             await using var existsCmd = new OracleCommand(existsSql, conn) { BindByName = true };
             existsCmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = request.Horizon });
             var exists = await existsCmd.ExecuteScalarAsync();
@@ -78,7 +78,7 @@ public class DueDatesController : ControllerBase
             if (exists is null || exists == DBNull.Value)
             {
                 const string insertSql = @"
-                    INSERT INTO cm_matrix_sb_duedate (cm_matrix_sb_duedate_horizon, cm_matrix_sb_duedate_duedate, cm_matrix_sb_duedate_lastupdate)
+                    INSERT INTO cm_matrix_sb_duedate (CM_MATRIX_SB_DD_HORIZON, cm_matrix_sb_dd_duedate, cm_matrix_sb_duedate_lastupdate)
                     VALUES (:horizon, :duedate, :lastupdate)";
                 await using var ins = new OracleCommand(insertSql, conn) { BindByName = true };
                 ins.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = request.Horizon });
@@ -89,8 +89,8 @@ public class DueDatesController : ControllerBase
             else
             {
                 const string updateSql = @"
-                    UPDATE cm_matrix_sb_duedate SET cm_matrix_sb_duedate_duedate = :duedate, cm_matrix_sb_duedate_lastupdate = :lastupdate
-                     WHERE cm_matrix_sb_duedate_horizon = :horizon";
+                    UPDATE cm_matrix_sb_duedate SET cm_matrix_sb_dd_duedate = :duedate, cm_matrix_sb_duedate_lastupdate = :lastupdate
+                     WHERE CM_MATRIX_SB_DD_HORIZON = :horizon";
                 await using var upd = new OracleCommand(updateSql, conn) { BindByName = true };
                 upd.Parameters.Add(new OracleParameter("duedate", OracleDbType.TimeStamp) { Value = (object?)dt ?? DBNull.Value });
                 upd.Parameters.Add(new OracleParameter("lastupdate", OracleDbType.TimeStamp) { Value = DateTime.Now });
@@ -116,7 +116,7 @@ public class DueDatesController : ControllerBase
         {
             await using var conn = _factory.Create();
             await conn.OpenWithNlsAsync();
-            const string deleteSql = @"DELETE FROM cm_matrix_sb_duedate WHERE cm_matrix_sb_duedate_horizon = :horizon";
+            const string deleteSql = @"DELETE FROM cm_matrix_sb_duedate WHERE CM_MATRIX_SB_DD_HORIZON = :horizon";
             await using var cmd = new OracleCommand(deleteSql, conn) { BindByName = true };
             cmd.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = horizon });
             await cmd.ExecuteNonQueryAsync();
