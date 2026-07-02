@@ -78,8 +78,8 @@ public class DueDatesController : ControllerBase
             if (exists is null || exists == DBNull.Value)
             {
                 const string insertSql = @"
-                    INSERT INTO cm_matrix_sb_duedate (CM_MATRIX_SB_DD_HORIZON, cm_matrix_sb_dd_duedate, cm_matrix_sb_dd_lastupdate)
-                    VALUES (:horizon, :duedate, :lastupdate)";
+                    INSERT INTO cm_matrix_sb_duedate (CM_MATRIX_SB_DD_HORIZON, cm_matrix_sb_dd_duedate)
+                    VALUES (:horizon, :duedate)";
                 await using var ins = new OracleCommand(insertSql, conn) { BindByName = true };
                 ins.Parameters.Add(new OracleParameter("horizon", OracleDbType.Varchar2) { Value = request.Horizon });
                 ins.Parameters.Add(new OracleParameter("duedate", OracleDbType.TimeStamp) { Value = (object?)dt ?? DBNull.Value });
@@ -89,7 +89,7 @@ public class DueDatesController : ControllerBase
             else
             {
                 const string updateSql = @"
-                    UPDATE cm_matrix_sb_duedate SET cm_matrix_sb_dd_duedate = :duedate, cm_matrix_sb_dd_lastupdate = :lastupdate
+                    UPDATE cm_matrix_sb_duedate SET cm_matrix_sb_dd_duedate = :duedate
                      WHERE CM_MATRIX_SB_DD_HORIZON = :horizon";
                 await using var upd = new OracleCommand(updateSql, conn) { BindByName = true };
                 upd.Parameters.Add(new OracleParameter("duedate", OracleDbType.TimeStamp) { Value = (object?)dt ?? DBNull.Value });
